@@ -1,6 +1,22 @@
 # Delibera
 
-An agentic application framework.
+An engine for **decision-grade AI deliberation**.
+
+## What is Delibera?
+
+Delibera is an open-source framework that makes multi-agent reasoning **structured, governed, and auditable**. Unlike chat-based AI systems, Delibera treats deliberation as a process—not a conversation.
+
+**Key features:**
+
+- **Governed tree search** — Deliberation is modeled as a tree with explicit expansion, pruning, and reduction operators controlled by the engine (not agents)
+- **Epistemic tracking** — Claims, evidence, and objections are explicit objects that are validated and auditable
+- **Deterministic convergence** — Runs terminate based on measurable predicates, not "when it feels done"
+- **Full traceability** — Every run can be replayed without re-invoking LLMs or tools
+- **Policy-controlled tools** — All external tool access is governed by layered policies
+
+**Use cases:** Research synthesis, architecture review, due diligence, strategy analysis, risk assessment.
+
+For detailed documentation, see [docs/index.md](docs/index.md).
 
 ## Development
 

@@ -42,13 +42,40 @@ Directory layout:
 
 ```
 runs/<run_id>/
-  trace.jsonl
-  artifact.json
-  metadata.json
+  trace.jsonl      # Append-only event log
+  artifact.json    # Final decision artifact
+  metadata.json    # Run metadata (see below)
 ```
 
-
 Each run has a unique, immutable `run_id`.
+
+### metadata.json contents
+
+The metadata file captures run-level information:
+
+```json
+{
+  "run_id": "abc123",
+  "protocol": "tree_protocol_v1",
+  "protocol_version": "1.0",
+  "started_at": "2024-01-15T10:30:00Z",
+  "completed_at": "2024-01-15T10:45:00Z",
+  "status": "converged",
+  "question": "What cloud provider should we use?",
+  "constraints": {
+    "max_depth": 3,
+    "max_tool_calls": 100
+  },
+  "summary": {
+    "total_nodes": 12,
+    "branches_pruned": 3,
+    "tool_calls": 47,
+    "user_gates_triggered": 2
+  }
+}
+```
+
+Metadata is written at run completion and is derived from trace events.
 
 ---
 

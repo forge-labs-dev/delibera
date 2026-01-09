@@ -15,7 +15,7 @@ All implementation must respect the constraints defined here.
 
 Delibera follows a **layered architecture** with strict separation of concerns:
 
-```pgsql
+```
 +----------------------------------------------------+
 |                    CLI / API                       |
 +---------------------------+------------------------+
@@ -25,11 +25,10 @@ Delibera follows a **layered architecture** with strict separation of concerns:
 +----------------------------------------------------+
 |   Epistemics   |   Tools & Policy   |   Tracing    |
 +----------------------------------------------------+
-|            Agents (Roles, LLM-backed)               |
+|            Agents (Roles, LLM-backed)              |
 +----------------------------------------------------+
-|              External Systems (LLMs, Docs, etc.)    |
+|             External Systems (LLMs, Docs, etc.)    |
 +----------------------------------------------------+
-
 ```
 
 The **Deliberation Engine** is the authority.  
@@ -256,38 +255,39 @@ Violations indicate architectural bugs.
 
 Recommended module split:
 
+```
 delibera/
-engine/
-orchestrator.py
-operators.py
-state.py
-protocol/
-spec.py
-interpreter.py
-agents/
-base.py
-planner.py
-proposer.py
-skeptic.py
-judge.py
-epistemics/
-claims.py
-evidence.py
-objections.py
-ledger.py
-validate.py
-tools/
-base.py
-router.py
-policy.py
-gates/
-models.py
-handlers.py
-trace/
-events.py
-writer.py
-replay.py
-
+├── engine/
+│   ├── orchestrator.py
+│   ├── operators.py
+│   └── state.py
+├── protocol/
+│   ├── spec.py
+│   └── interpreter.py
+├── agents/
+│   ├── base.py
+│   ├── planner.py
+│   ├── proposer.py
+│   ├── skeptic.py
+│   └── judge.py
+├── epistemics/
+│   ├── claims.py
+│   ├── evidence.py
+│   ├── objections.py
+│   ├── ledger.py
+│   └── validate.py
+├── tools/
+│   ├── base.py
+│   ├── router.py
+│   └── policy.py
+├── gates/
+│   ├── models.py
+│   └── handlers.py
+└── trace/
+    ├── events.py
+    ├── writer.py
+    └── replay.py
+```
 
 This layout mirrors responsibility boundaries.
 

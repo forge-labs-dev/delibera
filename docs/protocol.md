@@ -81,17 +81,36 @@ This schema may be serialized as YAML or JSON, but is defined here conceptually.
 
 Protocols reference **operators**, not agent logic.
 
-### Supported operators
-- `PLAN` (Work)
-- `EXPAND` (Expand)
-- `WORK` (Work)
-- `VALIDATE` (Validate)
-- `SCORE` (Score)
-- `PRUNE` (Prune)
-- `REDUCE` (Reduce)
-- `CONVERGE` (Check)
+### Operator types
 
-Agents are associated only with `Work` steps.
+The engine implements these core operators:
+- **Expand** — create child nodes (alternatives)
+- **Work** — execute agent logic on a node
+- **Validate** — check claims against evidence
+- **Score** — compute quality metrics
+- **Prune** — remove weak branches
+- **Reduce** — merge surviving branches
+
+### Protocol step names
+
+Protocol steps are named actions that map to operators:
+
+| Step | Operator | Description |
+|------|----------|-------------|
+| `PLAN` | Work | Initial planning using Planner role |
+| `EXPAND` | Expand | Create alternative branches |
+| `PROPOSE` | Work | Generate proposals using Proposer role |
+| `REDTEAM` | Work | Challenge proposals using Skeptic role |
+| `VALIDATE` | Validate | Check claims against evidence |
+| `SCORE` | Score | Compute branch quality scores |
+| `PRUNE` | Prune | Remove weak branches |
+| `REDUCE` | Reduce | Merge surviving branches |
+| `CONVERGE` | (check) | Evaluate convergence predicates |
+| `FINALIZE` | Work | Produce final artifact |
+
+Multiple step names may use the same operator (e.g., `PLAN`, `PROPOSE`, `REDTEAM` all invoke Work with different roles).
+
+Agents are associated only with Work-based steps.
 
 ---
 
@@ -298,6 +317,68 @@ This protocol:
 - supports multiple EXPANDs
 - guarantees one root and one leaf
 - is suitable for most decision workflows
+
+### Example: Tree Protocol v1 specification
+
+```yaml
+name: tree_protocol_v1
+version: "1.0"
+
+budgets:
+  max_depth: 3
+  max_tool_calls: 100
+  max_branches_per_expand: 5
+
+expand_rules:
+  - step: after_plan
+    max_children: 5
+    child_kind: option
+    min_quality: 0.3
+
+branch_pipeline:
+  - step: PROPOSE
+    role: proposer
+  - step: REDTEAM
+    role: skeptic
+  - step: VALIDATE
+  - step: SCORE
+
+prune_rule:
+  strategy: threshold_and_topk
+  min_score: 0.4
+  keep_top: 3
+  block_on_unsupported_facts: true
+
+reduce_rule:
+  strategy: merge_supported
+  conflict_handling: record_disagreement
+
+refinement:
+  enabled: true
+  max_rounds: 2
+  steps:
+    - REDTEAM
+    - VALIDATE
+    - SCORE
+
+convergence:
+  structural: single_branch
+  quality:
+    max_unsupported_claims: 2
+    min_evidence_coverage: 0.7
+    no_blocking_objections: true
+
+gates:
+  - type: scope_clarification
+    after: PLAN
+    trigger: low_confidence
+  - type: tradeoff_resolution
+    after: SCORE
+    trigger: score_tie
+  - type: final_signoff
+    after: CONVERGE
+    trigger: always
+```
 
 ---
 
