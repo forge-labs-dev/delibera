@@ -142,9 +142,7 @@ class Engine:
             # PROPOSE: Generate proposals for each branch
             proposer = ProposerStub()
             for child in children:
-                propose_output = proposer.execute(
-                    {"label": child.label, "question": question}
-                )
+                propose_output = proposer.execute({"label": child.label, "question": question})
                 tree.update_artifact(child.node_id, propose_output)
 
                 writer.emit(

@@ -126,7 +126,8 @@ class TestV0Run:
             # expand comes after plan work_output
             expand_idx = event_types.index("expand")
             plan_idx = next(
-                i for i, e in enumerate(events)
+                i
+                for i, e in enumerate(events)
                 if e["event_type"] == "work_output" and e["payload"].get("step") == "PLAN"
             )
             assert expand_idx > plan_idx
@@ -134,7 +135,8 @@ class TestV0Run:
             # prune comes after all PROPOSE work_outputs
             prune_idx = event_types.index("prune")
             propose_indices = [
-                i for i, e in enumerate(events)
+                i
+                for i, e in enumerate(events)
                 if e["event_type"] == "work_output" and e["payload"].get("step") == "PROPOSE"
             ]
             assert all(prune_idx > idx for idx in propose_indices)
@@ -194,17 +196,12 @@ class TestV0Run:
             events = [json.loads(line) for line in trace_path.read_text().splitlines()]
 
             # Find node_created events
-            node_created_events = [
-                e for e in events if e["event_type"] == "node_created"
-            ]
+            node_created_events = [e for e in events if e["event_type"] == "node_created"]
 
             # Should have 5 node_created events:
             # 1 root + 3 options + 1 merged
             assert len(node_created_events) == 5
 
             # Check merged node is included
-            merged_events = [
-                e for e in node_created_events
-                if e["payload"].get("kind") == "merged"
-            ]
+            merged_events = [e for e in node_created_events if e["payload"].get("kind") == "merged"]
             assert len(merged_events) == 1
