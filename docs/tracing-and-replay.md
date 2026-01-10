@@ -202,6 +202,18 @@ The artifact must be derivable from the trace.
 
 ---
 
+### 6.1 Artifact persistence
+
+When available, Delibera may use Strata as the persistence backend for artifacts referenced in traces.
+
+In this mode:
+- trace events reference Strata artifact IDs
+- artifacts are immutable and versioned
+- lineage between artifacts is preserved independently of trace logs
+
+Replay uses trace data for control flow reconstruction and Strata artifacts for content reconstruction, without re-executing agents or tools.
+
+
 ## 7. Replay semantics
 
 ### 7.1 Definition

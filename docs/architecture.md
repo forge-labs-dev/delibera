@@ -116,6 +116,33 @@ Removing agents entirely should not break the engine.
 
 ---
 
+### 2.4 Persistence and lineage (Strata)
+
+Delibera does not manage persistence, caching, or lineage internally.
+
+Instead, it delegates artifact materialization and provenance tracking to **Strata**, an external persistence layer for long-horizon computation.
+
+Strata provides:
+- immutable, versioned artifacts
+- deterministic deduplication by provenance
+- explicit lineage between artifacts
+- crash-safe finalization and recovery
+
+Delibera uses Strata to persist:
+- agent work outputs
+- validation reports
+- reduction results
+- final decision artifacts
+
+Strata does not:
+- control deliberation flow
+- manage retries or loops
+- execute agents or tools
+
+This separation ensures that Delibera remains an orchestration and reasoning system, while Strata serves as the durable memory and history of deliberation runs.
+
+---
+
 ## 3. Epistemics subsystem
 
 The epistemics layer implements:
