@@ -65,10 +65,11 @@ class Engine:
             tree=tree,
         )
 
-        # Initialize trace writer
-        writer = TraceWriter(run_dir)
-
+        # Initialize trace writer (may raise on permission errors)
+        writer: TraceWriter | None = None
         try:
+            writer = TraceWriter(run_dir)
+
             # Emit run_start
             writer.emit(
                 TraceEvent(
@@ -226,14 +227,15 @@ class Engine:
             return run_dir
 
         except Exception as e:
-            # Emit run_end with failed status on any error
-            writer.emit(
-                TraceEvent(
-                    event_type="run_end",
-                    run_id=run_id,
-                    payload={"status": "failed", "error": str(e)},
+            # Emit run_end with failed status on any error (only if writer initialized)
+            if writer is not None:
+                writer.emit(
+                    TraceEvent(
+                        event_type="run_end",
+                        run_id=run_id,
+                        payload={"status": "failed", "error": str(e)},
+                    )
                 )
-            )
             raise
 
     def _generate_run_id(self) -> str:

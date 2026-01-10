@@ -137,6 +137,9 @@ class DeliberationTree:
         Args:
             node_id: The node's ID.
             status: The new status.
+
+        Raises:
+            KeyError: If the node does not exist.
         """
         self._nodes[node_id].status = status
 
@@ -146,5 +149,8 @@ class DeliberationTree:
         Args:
             node_id: The node's ID.
             artifact: The new artifact data.
+
+        Raises:
+            KeyError: If the node does not exist.
         """
         self._nodes[node_id].artifact = artifact
