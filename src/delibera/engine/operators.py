@@ -8,6 +8,10 @@ from typing import Any
 
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree, Node
+from delibera.epistemics.extract import extract_claims
+from delibera.epistemics.ledger import merge_ledgers
+from delibera.epistemics.models import ClaimStatus
+from delibera.epistemics.validate import ClaimCheckReport, validate_claims
 
 
 def expand(tree: DeliberationTree, parent_id: str, labels: list[str]) -> list[Node]:
@@ -28,12 +32,48 @@ def expand(tree: DeliberationTree, parent_id: str, labels: list[str]) -> list[No
     return children
 
 
+def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckReport:
+    """Extract and validate claims for a node.
+
+    This operator:
+    1. Extracts claims from the node's artifact
+    2. Validates claims (updating their status)
+    3. Stores claims in the node's ledger
+    4. Returns a validation report
+
+    Args:
+        tree: The deliberation tree.
+        node_id: The node to validate.
+        owner: The role that produced the artifact.
+
+    Returns:
+        ClaimCheckReport with validation results.
+    """
+    node = tree.get_node(node_id)
+
+    # Extract claims from artifact
+    claims = extract_claims(node_id, node.artifact, owner)
+
+    # Validate claims (empty evidence in v1)
+    report = validate_claims(claims, evidence=[])
+
+    # Store claims in ledger
+    node.ledger.claims = claims
+
+    return report
+
+
 def prune(
     tree: DeliberationTree,
     node_ids: list[str],
     keep_count: int = 2,
 ) -> tuple[list[str], list[str]]:
-    """Prune weak branches, keeping the top-k by score.
+    """Prune weak branches using epistemic quality metrics.
+
+    Pruning priority (deterministic):
+    1. Fewer unsupported claims (ascending)
+    2. Fewer weak claims (ascending)
+    3. Higher artifact score (descending)
 
     Args:
         tree: The deliberation tree.
@@ -43,19 +83,33 @@ def prune(
     Returns:
         Tuple of (survivor_ids, pruned_ids).
     """
-    # Get nodes and their scores
-    nodes_with_scores: list[tuple[str, float]] = []
-    for node_id in node_ids:
-        node = tree.get_node(node_id)
-        score = node.artifact.get("score", 0.0)
-        nodes_with_scores.append((node_id, score))
 
-    # Sort by score descending
-    nodes_with_scores.sort(key=lambda x: x[1], reverse=True)
+    def compute_epistemic_key(node_id: str) -> tuple[int, int, float]:
+        """Compute sorting key for epistemic-based pruning.
+
+        Returns (unsupported_count, weak_count, -score) for sorting.
+        Lower is better for counts, higher is better for score.
+        """
+        node = tree.get_node(node_id)
+
+        # Count claims by status
+        unsupported = sum(
+            1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
+        )
+        weak = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK)
+        score = node.artifact.get("score", 0.0)
+
+        # Return tuple for sorting: (unsupported, weak, -score)
+        # Ascending sort means fewer unsupported/weak is better,
+        # and higher score (negative becomes more negative) is better
+        return (unsupported, weak, -score)
+
+    # Sort nodes by epistemic quality
+    sorted_node_ids = sorted(node_ids, key=compute_epistemic_key)
 
     # Split into survivors and pruned
-    survivor_ids = [nid for nid, _ in nodes_with_scores[:keep_count]]
-    pruned_ids = [nid for nid, _ in nodes_with_scores[keep_count:]]
+    survivor_ids = sorted_node_ids[:keep_count]
+    pruned_ids = sorted_node_ids[keep_count:]
 
     # Update status of pruned nodes
     for node_id in pruned_ids:
@@ -75,7 +129,7 @@ def reduce(tree: DeliberationTree, parent_id: str, survivor_ids: list[str]) -> N
     Returns:
         The merged node.
     """
-    # Collect artifacts from survivors
+    # Collect artifacts and ledgers from survivors
     survivors = [tree.get_node(nid) for nid in survivor_ids]
 
     # Build merged artifact
@@ -104,6 +158,10 @@ def reduce(tree: DeliberationTree, parent_id: str, survivor_ids: list[str]) -> N
     merged_node = tree.add_child(parent_id, label="merged", kind="merged")
     tree.update_artifact(merged_node.node_id, merged_artifact)
 
+    # Merge ledgers from survivors
+    survivor_ledgers = [s.ledger for s in survivors]
+    merged_node.ledger = merge_ledgers(survivor_ledgers)
+
     # Mark survivors as merged
     for nid in survivor_ids:
         tree.set_status(nid, "merged")
@@ -119,7 +177,7 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
         merged_node: The final merged node.
 
     Returns:
-        The final artifact dictionary.
+        The final artifact dictionary with claim_check_summary and open_questions.
     """
     # Get all option nodes to list what was considered (exclude merged node)
     root = state.tree.get_root()
@@ -129,6 +187,26 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
     options_considered = [n.label for n in option_nodes]
     survivors = merged_node.artifact.get("merged_from", [])
     pruned = [label for label in options_considered if label not in survivors]
+
+    # Compute claim check summary from merged ledger
+    supported = sum(
+        1 for c in merged_node.ledger.claims if c.status == ClaimStatus.SUPPORTED
+    )
+    weak = sum(1 for c in merged_node.ledger.claims if c.status == ClaimStatus.WEAK)
+    unsupported = sum(
+        1 for c in merged_node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
+    )
+
+    claim_check_summary = {
+        "supported": supported,
+        "weak": weak,
+        "unsupported": unsupported,
+    }
+
+    # Generate open questions based on epistemic quality
+    open_questions: list[str] = []
+    if weak > 0 or unsupported > 0:
+        open_questions.append("Add evidence to support inference claims.")
 
     artifact: dict[str, Any] = {
         "question": state.question,
@@ -140,6 +218,8 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
         "rationale": merged_node.artifact.get("pros", []),
         "risks": merged_node.artifact.get("cons", []),
         "confidence": merged_node.artifact.get("score", 0.0),
+        "claim_check_summary": claim_check_summary,
+        "open_questions": open_questions,
     }
 
     return artifact

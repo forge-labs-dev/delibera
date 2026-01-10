@@ -1,4 +1,4 @@
-"""Integration tests for v0 deliberation runs."""
+"""Integration tests for v0.2 deliberation runs with epistemics."""
 
 import json
 import tempfile
@@ -10,7 +10,7 @@ from delibera.engine.orchestrator import Engine
 
 
 class TestV0Run:
-    """Test the v0 vertical slice end-to-end."""
+    """Test the v0.2 vertical slice end-to-end with epistemics."""
 
     def test_run_creates_output_files(self) -> None:
         """Test that a run creates trace.jsonl and artifact.json."""
@@ -76,12 +76,13 @@ class TestV0Run:
             # Collect event types
             event_types = {e["event_type"] for e in events}
 
-            # Check all required event types are present
+            # Check all required event types are present (including v0.2 epistemics)
             required_events = {
                 "run_start",
                 "node_created",
                 "work_output",
                 "expand",
+                "claim_validation_report",  # v0.2: epistemics
                 "prune",
                 "reduce",
                 "final_artifact_written",
@@ -140,6 +141,13 @@ class TestV0Run:
                 if e["event_type"] == "work_output" and e["payload"].get("step") == "PROPOSE"
             ]
             assert all(prune_idx > idx for idx in propose_indices)
+
+            # claim_validation_report comes after PROPOSE and before prune
+            validation_indices = [
+                i for i, e in enumerate(events) if e["event_type"] == "claim_validation_report"
+            ]
+            assert all(prune_idx > idx for idx in validation_indices)
+            assert all(idx > max(propose_indices) for idx in validation_indices)
 
             # reduce comes after prune
             reduce_idx = event_types.index("reduce")
@@ -205,3 +213,95 @@ class TestV0Run:
             # Check merged node is included
             merged_events = [e for e in node_created_events if e["payload"].get("kind") == "merged"]
             assert len(merged_events) == 1
+
+    def test_trace_has_claim_validation_reports(self) -> None:
+        """Test that claim_validation_report events are present and valid."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir)
+            engine = Engine(runs_dir=runs_dir)
+
+            run_dir = engine.run("Should we adopt uv?")
+            trace_path = run_dir / "trace.jsonl"
+
+            events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            validation_events = [
+                e for e in events if e["event_type"] == "claim_validation_report"
+            ]
+
+            # Should have 3 validation events (one per option node)
+            assert len(validation_events) == 3
+
+            # Each validation event should have required fields
+            for event in validation_events:
+                payload = event["payload"]
+                assert "node_id" in payload
+                assert "supported" in payload
+                assert "weak" in payload
+                assert "unsupported" in payload
+                assert "details" in payload
+                assert isinstance(payload["details"], list)
+
+    def test_artifact_has_claim_check_summary(self) -> None:
+        """Test that artifact.json has claim_check_summary and open_questions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir)
+            engine = Engine(runs_dir=runs_dir)
+
+            run_dir = engine.run("Should we adopt uv?")
+            artifact_path = run_dir / "artifact.json"
+
+            artifact = json.loads(artifact_path.read_text())
+
+            # Check v0.2 epistemics fields
+            assert "claim_check_summary" in artifact
+            summary = artifact["claim_check_summary"]
+            assert "supported" in summary
+            assert "weak" in summary
+            assert "unsupported" in summary
+
+            # Check open_questions exists (may be empty or populated)
+            assert "open_questions" in artifact
+            assert isinstance(artifact["open_questions"], list)
+
+    def test_epistemic_pruning_is_deterministic(self) -> None:
+        """Test that epistemic-based pruning produces consistent results."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir)
+            engine = Engine(runs_dir=runs_dir)
+
+            # Run twice with same question
+            run_dir_1 = engine.run("Should we adopt uv?")
+            run_dir_2 = engine.run("Should we adopt uv?")
+
+            artifact_1 = json.loads((run_dir_1 / "artifact.json").read_text())
+            artifact_2 = json.loads((run_dir_2 / "artifact.json").read_text())
+
+            # Same survivors and pruned (deterministic)
+            assert artifact_1["survivors"] == artifact_2["survivors"]
+            assert artifact_1["pruned"] == artifact_2["pruned"]
+
+            # Same claim check summary
+            assert artifact_1["claim_check_summary"] == artifact_2["claim_check_summary"]
+
+    def test_claim_validation_details_structure(self) -> None:
+        """Test that claim validation details have correct structure."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir)
+            engine = Engine(runs_dir=runs_dir)
+
+            run_dir = engine.run("Test question")
+            trace_path = run_dir / "trace.jsonl"
+
+            events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            validation_events = [
+                e for e in events if e["event_type"] == "claim_validation_report"
+            ]
+
+            for event in validation_events:
+                details = event["payload"]["details"]
+                for detail in details:
+                    assert "claim_id" in detail
+                    assert "status" in detail
+                    assert "type" in detail
+                    assert detail["status"] in ["supported", "weak", "unsupported", "unvalidated"]
+                    assert detail["type"] in ["fact", "inference", "value", "plan"]
