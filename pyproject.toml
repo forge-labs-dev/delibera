@@ -7,7 +7,9 @@ authors = [
     { name = "HuilinXu", email = "huilinlynn@wustl.edu" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "click>=8.1.0",
+]
 license = { file = "LICENSE" }
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,6 +22,9 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/forge-labs-dev/delibera"
 Repository = "https://github.com/forge-labs-dev/delibera"
+
+[project.scripts]
+delibera = "delibera.cli:main"
 
 [dependency-groups]
 dev = [
