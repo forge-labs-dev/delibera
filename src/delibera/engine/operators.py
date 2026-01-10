@@ -93,9 +93,7 @@ def prune(
         node = tree.get_node(node_id)
 
         # Count claims by status
-        unsupported = sum(
-            1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
-        )
+        unsupported = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED)
         weak = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK)
         score = node.artifact.get("score", 0.0)
 
@@ -189,13 +187,9 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
     pruned = [label for label in options_considered if label not in survivors]
 
     # Compute claim check summary from merged ledger
-    supported = sum(
-        1 for c in merged_node.ledger.claims if c.status == ClaimStatus.SUPPORTED
-    )
+    supported = sum(1 for c in merged_node.ledger.claims if c.status == ClaimStatus.SUPPORTED)
     weak = sum(1 for c in merged_node.ledger.claims if c.status == ClaimStatus.WEAK)
-    unsupported = sum(
-        1 for c in merged_node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
-    )
+    unsupported = sum(1 for c in merged_node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED)
 
     claim_check_summary = {
         "supported": supported,

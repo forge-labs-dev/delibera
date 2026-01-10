@@ -224,9 +224,7 @@ class TestV0Run:
             trace_path = run_dir / "trace.jsonl"
 
             events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-            validation_events = [
-                e for e in events if e["event_type"] == "claim_validation_report"
-            ]
+            validation_events = [e for e in events if e["event_type"] == "claim_validation_report"]
 
             # Should have 3 validation events (one per option node)
             assert len(validation_events) == 3
@@ -293,9 +291,7 @@ class TestV0Run:
             trace_path = run_dir / "trace.jsonl"
 
             events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-            validation_events = [
-                e for e in events if e["event_type"] == "claim_validation_report"
-            ]
+            validation_events = [e for e in events if e["event_type"] == "claim_validation_report"]
 
             for event in validation_events:
                 details = event["payload"]["details"]

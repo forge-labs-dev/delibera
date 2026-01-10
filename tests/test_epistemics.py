@@ -1,6 +1,5 @@
 """Unit tests for the epistemics package."""
 
-
 from delibera.epistemics.extract import extract_claims
 from delibera.epistemics.ledger import Ledger, merge_ledgers
 from delibera.epistemics.models import (
