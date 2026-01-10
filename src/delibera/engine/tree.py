@@ -1,8 +1,20 @@
 """Deliberation tree data structures."""
 
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from delibera.epistemics.ledger import Ledger
+
+
+def _create_empty_ledger() -> Ledger:
+    """Create an empty ledger for a new node."""
+    from delibera.epistemics.ledger import Ledger
+
+    return Ledger()
 
 
 @dataclass
@@ -20,6 +32,7 @@ class Node:
     status: Literal["active", "pruned", "merged"] = "active"
     artifact: dict[str, Any] = field(default_factory=dict)
     label: str = ""
+    ledger: Ledger = field(default_factory=_create_empty_ledger)
 
 
 def _generate_id() -> str:

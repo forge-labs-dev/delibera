@@ -1,8 +1,10 @@
-"""Delibera - An engine for decision-grade AI deliberation."""
+"""Epistemics package for Delibera.
 
-from delibera.engine.orchestrator import Engine
-from delibera.engine.state import RunState
-from delibera.engine.tree import DeliberationTree, Node
+This package provides epistemic objects (claims, evidence, objections) and
+operations (extraction, validation, ledger management) that enable
+epistemically grounded deliberation.
+"""
+
 from delibera.epistemics.extract import extract_claims
 from delibera.epistemics.ledger import Ledger, merge_ledgers
 from delibera.epistemics.models import (
@@ -15,16 +17,8 @@ from delibera.epistemics.models import (
     ObjectionStatus,
 )
 from delibera.epistemics.validate import ClaimCheckReport, validate_claims
-from delibera.trace.events import TraceEvent
-from delibera.trace.writer import TraceWriter
 
 __all__ = [
-    # Engine
-    "Engine",
-    "RunState",
-    "DeliberationTree",
-    "Node",
-    # Epistemics
     "Claim",
     "ClaimCheckReport",
     "ClaimStatus",
@@ -37,7 +31,4 @@ __all__ = [
     "extract_claims",
     "merge_ledgers",
     "validate_claims",
-    # Trace
-    "TraceEvent",
-    "TraceWriter",
 ]

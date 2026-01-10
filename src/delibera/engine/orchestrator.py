@@ -19,13 +19,14 @@ from delibera.trace.writer import TraceWriter
 class Engine:
     """The deliberation engine orchestrator.
 
-    Implements the v0 protocol with deterministic stub agents:
+    Implements the v0.2 protocol with deterministic stub agents:
     1. PLAN - Generate branch labels
     2. EXPAND - Create child nodes
     3. PROPOSE - Generate proposals per branch
-    4. PRUNE - Keep top-2 by score
-    5. REDUCE - Merge survivors
-    6. FINALIZE - Write artifact
+    4. VALIDATE - Extract and validate claims (NEW in v0.2)
+    5. PRUNE - Keep top-2 by epistemic quality
+    6. REDUCE - Merge survivors
+    7. FINALIZE - Write artifact with claim_check_summary
     """
 
     def __init__(self, runs_dir: Path | None = None) -> None:
@@ -159,7 +160,24 @@ class Engine:
                     )
                 )
 
-            # PRUNE: Keep top-2 by score
+            # VALIDATE: Extract and validate claims for each branch
+            for child in children:
+                report = operators.validate(tree, child.node_id, "proposer")
+                writer.emit(
+                    TraceEvent(
+                        event_type="claim_validation_report",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "supported": report.supported,
+                            "weak": report.weak,
+                            "unsupported": report.unsupported,
+                            "details": report.details,
+                        },
+                    )
+                )
+
+            # PRUNE: Keep top-2 by epistemic quality
             child_ids = [c.node_id for c in children]
             survivor_ids, pruned_ids = operators.prune(tree, child_ids, keep_count=2)
 
