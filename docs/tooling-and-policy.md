@@ -31,19 +31,19 @@ Delibera enforces **governed tool access** so that:
 
 Tooling in Delibera follows these principles:
 
-1. **Engine-mediated access**  
+1. **Engine-mediated access**
    Agents never call tools directly.
 
-2. **Policy-first design**  
+2. **Policy-first design**
    Tool access is allowed only when permitted by policy.
 
-3. **Least privilege**  
+3. **Least privilege**
    Roles and steps receive only the tools they require.
 
-4. **Traceability**  
+4. **Traceability**
    Every tool call is logged with inputs and outputs.
 
-5. **Epistemic safety**  
+5. **Epistemic safety**
    Validation cannot introduce new evidence.
 
 ---

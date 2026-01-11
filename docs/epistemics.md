@@ -65,20 +65,20 @@ Claims must be:
 
 Claim types have different epistemic requirements:
 
-- **fact**  
-  Asserts something about the world.  
+- **fact**
+  Asserts something about the world.
   Requires evidence.
 
-- **inference**  
-  Draws a conclusion from other claims or evidence.  
+- **inference**
+  Draws a conclusion from other claims or evidence.
   Requires justification and inherits uncertainty.
 
-- **value**  
-  Expresses a preference or judgment.  
+- **value**
+  Expresses a preference or judgment.
   Does not require evidence, but must be explicit.
 
-- **plan**  
-  Proposes an action or sequence of steps.  
+- **plan**
+  Proposes an action or sequence of steps.
   Does not require evidence, but may introduce risks.
 
 Claim type determines validation behavior.
@@ -218,14 +218,14 @@ This prevents post-hoc rationalization.
 
 Objections progress through states:
 
-1. **open**  
+1. **open**
    Objection has been raised and not addressed.
 
-2. **resolved**  
+2. **resolved**
    Objection has been addressed through revision,
    mitigation, or additional evidence.
 
-3. **accepted**  
+3. **accepted**
    Objection remains valid but is explicitly accepted
    as a known risk or tradeoff.
 

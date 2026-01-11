@@ -92,10 +92,10 @@ Protocols may enable or disable them, but must not redefine their semantics.
 
 ### 5.1 Gate: Intake
 
-**Purpose**  
+**Purpose**
 Collect initial question, constraints, and success criteria.
 
-**When**  
+**When**
 At run start, before any operator execution.
 
 **User input**
@@ -110,10 +110,10 @@ At run start, before any operator execution.
 
 ### 5.2 Gate: Scope clarification
 
-**Purpose**  
+**Purpose**
 Ensure the system is solving the right problem.
 
-**When**  
+**When**
 After PLAN, before the first EXPAND.
 
 **Trigger predicate (examples)**
@@ -134,10 +134,10 @@ After PLAN, before the first EXPAND.
 
 ### 5.3 Gate: Evidence access
 
-**Purpose**  
+**Purpose**
 Handle blocked validation due to missing or restricted sources.
 
-**When**  
+**When**
 During VALIDATE, when evidence is insufficient or policy blocks access.
 
 **Trigger predicate (examples)**
@@ -157,10 +157,10 @@ During VALIDATE, when evidence is insufficient or policy blocks access.
 
 ### 5.4 Gate: Tradeoff resolution
 
-**Purpose**  
+**Purpose**
 Resolve value-based ambiguity between strong alternatives.
 
-**When**  
+**When**
 After scoring and before PRUNE, when multiple branches are near-tied.
 
 **Trigger predicate (examples)**
@@ -180,10 +180,10 @@ After scoring and before PRUNE, when multiple branches are near-tied.
 
 ### 5.5 Gate: Final sign-off
 
-**Purpose**  
+**Purpose**
 Provide accountability for the final decision.
 
-**When**  
+**When**
 After convergence criteria are satisfied.
 
 **User input**
