@@ -38,7 +38,7 @@ At runtime:
 5. All structural operations are engine-applied.
 6. Execution stops only when convergence predicates hold.
 
-Protocols constrain *possibility space*;  
+Protocols constrain *possibility space*;
 the engine enforces correctness.
 
 ---
@@ -228,7 +228,7 @@ PRUNE rules must be:
 - deterministic
 - auditable
 
-Agents may recommend pruning;  
+Agents may recommend pruning;
 the engine decides.
 
 ---

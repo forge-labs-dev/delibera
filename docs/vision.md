@@ -14,12 +14,12 @@ Delibera treats deliberation as a **process**, not a conversation.
 
 Current multi-agent LLM systems suffer from the same core issues:
 
-- reasoning is implicit and unstructured  
-- disagreement is uncontrolled  
-- convergence is undefined (“stop when it feels done”)  
-- claims are mixed with opinions and plans  
-- evidence is untracked or post-hoc  
-- outputs are chat logs, not decisions  
+- reasoning is implicit and unstructured
+- disagreement is uncontrolled
+- convergence is undefined (“stop when it feels done”)
+- claims are mixed with opinions and plans
+- evidence is untracked or post-hoc
+- outputs are chat logs, not decisions
 
 As a result, these systems:
 - hallucinate confidently,
@@ -35,9 +35,9 @@ Delibera exists to address these failures **at the system level**, not via bette
 
 Delibera models deliberation as a **governed tree search**:
 
-- one **root**: the user’s question and constraints  
-- multiple **branches**: alternatives, hypotheses, plans, or risks  
-- one **leaf**: a single, canonical decision artifact  
+- one **root**: the user’s question and constraints
+- multiple **branches**: alternatives, hypotheses, plans, or risks
+- one **leaf**: a single, canonical decision artifact
 
 The system explicitly:
 - expands alternatives,
@@ -89,7 +89,7 @@ Delibera does not aim to:
 ## Design principles
 
 ### 1. Governance over autonomy
-Agents propose content.  
+Agents propose content.
 The engine governs structure, operators, and stopping.
 
 No agent can:
@@ -186,7 +186,7 @@ Its success is measured not by fluency, but by **trustworthiness**.
 
 ## Guiding statement
 
-> If a decision cannot be explained, traced, and replayed,  
+> If a decision cannot be explained, traced, and replayed,
 > it should not be automated.
 
 Delibera exists to make that principle practical.

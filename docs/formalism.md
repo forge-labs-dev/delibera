@@ -19,7 +19,7 @@ Formally, a Delibera run consists of:
 - explicit **convergence predicates**
 - optional **user gates**
 
-Agents generate proposals and evaluations;  
+Agents generate proposals and evaluations;
 the **engine controls structure, progression, and termination**.
 
 ---
@@ -336,8 +336,8 @@ Violating any invariant is a correctness bug.
 
 Delibera formalizes deliberation as:
 
-> A governed tree search over epistemic artifacts,  
-> with explicit operators, constrained agent roles,  
+> A governed tree search over epistemic artifacts,
+> with explicit operators, constrained agent roles,
 > and deterministic convergence.
 
 This formalism underpins all protocols, implementations, and evaluations.

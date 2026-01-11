@@ -31,7 +31,7 @@ Delibera follows a **layered architecture** with strict separation of concerns:
 +----------------------------------------------------+
 ```
 
-The **Deliberation Engine** is the authority.  
+The **Deliberation Engine** is the authority.
 All other components operate under its control.
 
 ---
@@ -83,7 +83,7 @@ Protocols are:
 - workflow-agnostic
 - independent of agent implementations
 
-The engine interprets protocols.  
+The engine interprets protocols.
 Protocols never execute logic themselves.
 
 ---
@@ -248,17 +248,17 @@ Replay uses trace data to:
 
 ## 7. Data flow (end-to-end)
 
-1. User provides question and constraints  
-2. Engine initializes root node  
-3. Protocol dictates next operator  
-4. Engine invokes agent(s) for Work steps  
-5. Agents propose structured outputs  
-6. Engine applies operators and updates state  
-7. Tool requests are routed and logged  
-8. Validation and pruning occur  
-9. Reduction collapses branches  
-10. Convergence is evaluated  
-11. Final artifact is produced and logged  
+1. User provides question and constraints
+2. Engine initializes root node
+3. Protocol dictates next operator
+4. Engine invokes agent(s) for Work steps
+5. Agents propose structured outputs
+6. Engine applies operators and updates state
+7. Tool requests are routed and logged
+8. Validation and pruning occur
+9. Reduction collapses branches
+10. Convergence is evaluated
+11. Final artifact is produced and logged
 
 At no point do agents control the flow.
 
@@ -324,11 +324,11 @@ This layout mirrors responsibility boundaries.
 
 The architecture must preserve:
 
-1. Engine-only authority over structure and termination  
-2. Explicit epistemic objects  
-3. Governed tool access  
-4. Deterministic convergence  
-5. Replayable execution  
+1. Engine-only authority over structure and termination
+2. Explicit epistemic objects
+3. Governed tool access
+4. Deterministic convergence
+5. Replayable execution
 
 Breaking any invariant compromises Delibera’s correctness.
 
