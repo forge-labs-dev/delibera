@@ -403,7 +403,6 @@ class Engine:
 
         # Emit gate_response_applied
         changes = get_response_changes(
-            GateType.SCOPE,
             response,
             context={"original_branches": branch_labels},
         )
@@ -459,7 +458,7 @@ class Engine:
         apply_final_signoff_response(response)
 
         # Emit gate_response_applied
-        changes = get_response_changes(GateType.FINAL_SIGNOFF, response)
+        changes = get_response_changes(response)
         self._emit_trace_event(
             "gate_response_applied",
             {

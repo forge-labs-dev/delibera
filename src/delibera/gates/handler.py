@@ -183,7 +183,12 @@ class CLIGateHandler(GateHandler):
                 action=AllowedAction.VETO_BRANCHES,
                 parameters={"branches": branches},
             )
+        elif user_input == "veto":
+            # Veto without branches - will fail validation, prompting retry
+            return GateResponse(
+                action=AllowedAction.VETO_BRANCHES,
+                parameters={"branches": []},
+            )
         else:
-            # Return invalid action to trigger validation error
-            click.echo(f"Unknown command: {user_input}")
-            return GateResponse(action=AllowedAction.APPROVE)
+            click.echo(f"Unknown command: '{user_input}'. Please try again.")
+            return self._collect_response(summary)

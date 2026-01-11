@@ -74,7 +74,6 @@ def apply_final_signoff_response(response: GateResponse) -> bool:
 
 
 def get_response_changes(
-    gate_type: GateType,  # noqa: ARG001
     response: GateResponse,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -83,7 +82,6 @@ def get_response_changes(
     Used for trace logging to show what changed.
 
     Args:
-        gate_type: The type of gate.
         response: The gate response.
         context: Optional context (e.g., original branches for veto).
 

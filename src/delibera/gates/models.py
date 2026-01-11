@@ -112,28 +112,6 @@ class GateResponse:
         return result
 
 
-@dataclass
-class GateEvent:
-    """A gate event for tracing.
-
-    Captures the gate trigger and response for the trace log.
-    """
-
-    gate_type: GateType
-    summary: GateSummary
-    node_id: str | None = None  # Applicable for some gates
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for trace payload."""
-        result: dict[str, Any] = {
-            "gate_type": self.gate_type.value,
-            "summary": self.summary.to_dict(),
-        }
-        if self.node_id:
-            result["node_id"] = self.node_id
-        return result
-
-
 class GateError(Exception):
     """Raised when gate processing fails."""
 
