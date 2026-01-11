@@ -1,6 +1,10 @@
 """Stub agents for v0 testing without LLMs."""
 
+from collections.abc import Callable
 from typing import Any
+
+# Type alias for tool callback provided by engine
+ToolCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 class PlannerStub:
@@ -36,21 +40,35 @@ class ProposerStub:
     - Option A: 0.8 (highest)
     - Option B: 0.6 (medium)
     - Option C: 0.4 (lowest, will be pruned)
+
+    Optionally uses calculator tool to compute confidence when tool callback provided.
     """
 
-    # Deterministic scores for testing
-    _SCORES: dict[str, float] = {
+    # Deterministic base scores for testing
+    _BASE_SCORES: dict[str, str] = {
+        "A": "0.75+0.05",  # = 0.8
+        "B": "0.55+0.05",  # = 0.6
+        "C": "0.35+0.05",  # = 0.4
+    }
+
+    # Fallback scores when tool is not available
+    _FALLBACK_SCORES: dict[str, float] = {
         "A": 0.8,
         "B": 0.6,
         "C": 0.4,
     }
 
-    def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+    def execute(
+        self,
+        context: dict[str, Any],
+        tool: ToolCallback | None = None,
+    ) -> dict[str, Any]:
         """Generate a proposal for a branch.
 
         Args:
             context: Must contain "label" key with branch label,
                 and "question" key with the original question.
+            tool: Optional tool callback for computing confidence.
 
         Returns:
             Dict with proposal details and score.
@@ -65,9 +83,22 @@ class ProposerStub:
                 option_letter = letter
                 break
 
-        score = self._SCORES.get(option_letter, 0.5)
+        # Compute score using calculator if tool is available
+        score: float
+        used_tool = False
+        if tool is not None:
+            expression = self._BASE_SCORES.get(option_letter, "0.5")
+            try:
+                result = tool("calculator", {"expression": expression})
+                score = float(result.get("result", 0.5))
+                used_tool = True
+            except Exception:
+                # Fallback if tool fails
+                score = self._FALLBACK_SCORES.get(option_letter, 0.5)
+        else:
+            score = self._FALLBACK_SCORES.get(option_letter, 0.5)
 
-        return {
+        output: dict[str, Any] = {
             "proposal": f"Proposal for {label}",
             "summary": f"This approach addresses '{question[:50]}...' by...",
             "pros": [f"Pro 1 for option {option_letter}", f"Pro 2 for option {option_letter}"],
@@ -75,3 +106,8 @@ class ProposerStub:
             "score": score,
             "role": "proposer",
         }
+
+        if used_tool:
+            output["confidence_computed_by"] = "calculator"
+
+        return output
