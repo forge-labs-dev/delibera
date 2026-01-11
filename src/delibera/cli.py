@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from delibera.engine.orchestrator import Engine
+from delibera.gates import AutoApproveGateHandler, CLIGateHandler, GateAborted, GateHandler
 from delibera.trace.reader import load_artifact
 from delibera.trace.replay import replay_from_directory, verify_replay
 
@@ -22,17 +23,54 @@ def main() -> None:
     required=True,
     help="The question or problem to deliberate on.",
 )
-def run(question: str) -> None:
+@click.option(
+    "--gates/--no-gates",
+    default=True,
+    help="Enable or disable user gates. Default: enabled.",
+)
+@click.option(
+    "--auto-approve-gates",
+    is_flag=True,
+    default=False,
+    help="Automatically approve all gates without prompting. For CI/tests.",
+)
+def run(question: str, gates: bool, auto_approve_gates: bool) -> None:
     """Run a deliberation on the given question.
 
     Creates a new run directory with trace.jsonl and artifact.json.
-    """
-    engine = Engine()
-    run_dir = engine.run(question)
 
-    click.echo(f"Run completed: {run_dir}")
-    click.echo(f"Trace: {run_dir}/trace.jsonl")
-    click.echo(f"Artifact: {run_dir}/artifact.json")
+    Gates are enabled by default. Use --no-gates to disable them entirely,
+    or --auto-approve-gates to automatically approve without prompting.
+    """
+    # Determine gate handler
+    gate_handler: GateHandler
+    if not gates:
+        # Gates disabled - use auto-approve (no gates will fire)
+        gate_handler = AutoApproveGateHandler()
+        gates_enabled = False
+    elif auto_approve_gates:
+        # Gates enabled but auto-approved
+        gate_handler = AutoApproveGateHandler()
+        gates_enabled = True
+    else:
+        # Interactive gates
+        gate_handler = CLIGateHandler()
+        gates_enabled = True
+
+    engine = Engine(
+        gate_handler=gate_handler,
+        gates_enabled=gates_enabled,
+    )
+
+    try:
+        run_dir = engine.run(question)
+        click.echo(f"Run completed: {run_dir}")
+        click.echo(f"Trace: {run_dir}/trace.jsonl")
+        click.echo(f"Artifact: {run_dir}/artifact.json")
+    except GateAborted as e:
+        click.echo(f"Run aborted: {e.message}", err=True)
+        click.echo(f"Gate: {e.gate_type.value}", err=True)
+        sys.exit(1)
 
 
 @main.command()
