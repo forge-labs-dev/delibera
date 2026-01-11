@@ -688,10 +688,13 @@ class TestReplayNoAgentsCalled:
             raise RuntimeError("Agent should NOT be called during replay!")
 
         # Patch the agent module at the point where it would be imported
-        with patch.dict("sys.modules", {
-            "delibera.agents.proposer": MagicMock(ProposerAgent=raise_error),
-            "delibera.agents.synthesizer": MagicMock(SynthesizerAgent=raise_error),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "delibera.agents.proposer": MagicMock(ProposerAgent=raise_error),
+                "delibera.agents.synthesizer": MagicMock(SynthesizerAgent=raise_error),
+            },
+        ):
             # This should succeed without calling any agents
             replayed = replay_run(events)
 

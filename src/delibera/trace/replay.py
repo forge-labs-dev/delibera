@@ -250,11 +250,7 @@ def _derive_artifact(replayed: ReplayedRun) -> dict[str, Any]:
         artifact["summary"] = merged_node.artifact.get("summary", "")
 
     # Get options considered from option nodes
-    options = [
-        node.label
-        for node in replayed.nodes.values()
-        if node.kind == "option"
-    ]
+    options = [node.label for node in replayed.nodes.values() if node.kind == "option"]
     artifact["options_considered"] = options
 
     # Get survivors and pruned

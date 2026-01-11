@@ -101,9 +101,7 @@ def _validate_node_structure(events: list[dict[str, Any]]) -> list[str]:
             if kind == "root":
                 root_nodes.append(node_id)
             elif parent_id and parent_id not in created_nodes:
-                errors.append(
-                    f"Node {node_id} references unknown parent {parent_id}"
-                )
+                errors.append(f"Node {node_id} references unknown parent {parent_id}")
 
     # Check exactly one root
     if len(root_nodes) == 0:
