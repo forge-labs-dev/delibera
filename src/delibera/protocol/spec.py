@@ -1,0 +1,180 @@
+"""Protocol specification dataclasses.
+
+Defines the declarative structure for deliberation protocols.
+Protocols specify WHAT steps run and WHERE expansion happens;
+the engine still applies operators.
+"""
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class StepSpec:
+    """Specification for a single protocol step.
+
+    A step is a unit of work that the engine executes.
+    """
+
+    id: str
+    kind: Literal["work", "validate", "score"]
+    step_name: str
+    role: str | None = None  # Required for "work" steps
+
+    def __post_init__(self) -> None:
+        """Validate step specification."""
+        if self.kind == "work" and not self.role:
+            raise ValueError(f"Step '{self.id}' of kind 'work' requires a role")
+
+
+@dataclass
+class ExpandSpec:
+    """Specification for an expansion point in the protocol.
+
+    Defines where and how the tree should expand.
+    """
+
+    at_step_id: str  # Step after which expansion occurs
+    child_kind: Literal["option", "plan", "risk"]
+    max_children: int
+    depth: int  # Expansion depth level (1 for options, 2 for subplans)
+    source: Literal["planner_output", "agent_output"]  # Where to read branch specs
+    min_quality: float | None = None  # Optional quality threshold (not used in v1)
+
+    def __post_init__(self) -> None:
+        """Validate expand specification."""
+        if self.max_children <= 0:
+            raise ValueError(f"max_children must be > 0, got {self.max_children}")
+        if self.depth <= 0:
+            raise ValueError(f"depth must be > 0, got {self.depth}")
+
+
+@dataclass
+class PruneSpec:
+    """Specification for pruning behavior."""
+
+    rule: Literal["epistemic_then_score", "score_only"]
+    keep_k: int
+
+    def __post_init__(self) -> None:
+        """Validate prune specification."""
+        if self.keep_k <= 0:
+            raise ValueError(f"keep_k must be > 0, got {self.keep_k}")
+
+
+@dataclass
+class ReduceSpec:
+    """Specification for reduction behavior."""
+
+    rule: Literal["promote_single", "merge_artifacts"]
+
+
+@dataclass
+class ConvergenceSpec:
+    """Specification for convergence behavior."""
+
+    max_rounds: int = 0  # For refine loop; 0 means no refinement
+
+    def __post_init__(self) -> None:
+        """Validate convergence specification."""
+        if self.max_rounds < 0:
+            raise ValueError(f"max_rounds must be >= 0, got {self.max_rounds}")
+
+
+@dataclass
+class ProtocolSpec:
+    """Complete specification for a deliberation protocol.
+
+    Defines the step sequence, expansion points, and convergence rules.
+    """
+
+    name: str
+    max_depth: int
+    expand_rules: list[ExpandSpec]
+    branch_pipeline: list[StepSpec]  # Steps run per node after expansion
+    prune: PruneSpec
+    reduce: ReduceSpec
+    convergence: ConvergenceSpec = field(default_factory=ConvergenceSpec)
+    refine_loop: list[StepSpec] = field(default_factory=list)  # Optional refinement steps
+    gates_enabled: bool = True  # Engine may override via CLI flags
+
+    def __post_init__(self) -> None:
+        """Validate protocol specification."""
+        if self.max_depth <= 0:
+            raise ValueError(f"max_depth must be > 0, got {self.max_depth}")
+        if not self.name:
+            raise ValueError("Protocol name cannot be empty")
+
+        # Validate expand rules don't exceed max_depth
+        for expand in self.expand_rules:
+            if expand.depth > self.max_depth:
+                raise ValueError(
+                    f"Expand rule at '{expand.at_step_id}' has depth {expand.depth} "
+                    f"exceeding max_depth {self.max_depth}"
+                )
+
+    def get_expand_rule_at_step(self, step_id: str, depth: int) -> ExpandSpec | None:
+        """Get the expand rule that triggers after a given step at a given depth.
+
+        Args:
+            step_id: The step ID to check.
+            depth: The current tree depth.
+
+        Returns:
+            ExpandSpec if an expansion should occur, None otherwise.
+        """
+        for rule in self.expand_rules:
+            if rule.at_step_id == step_id and rule.depth == depth + 1:
+                return rule
+        return None
+
+    def get_step_by_id(self, step_id: str) -> StepSpec | None:
+        """Get a step specification by ID.
+
+        Args:
+            step_id: The step ID to find.
+
+        Returns:
+            StepSpec if found, None otherwise.
+        """
+        for step in self.branch_pipeline:
+            if step.id == step_id:
+                return step
+        for step in self.refine_loop:
+            if step.id == step_id:
+                return step
+        return None
+
+
+def validate_protocol(spec: ProtocolSpec) -> list[str]:
+    """Validate a protocol specification for correctness.
+
+    Args:
+        spec: The protocol specification to validate.
+
+    Returns:
+        List of validation errors (empty if valid).
+    """
+    errors: list[str] = []
+
+    # Check that expand rules reference valid steps
+    all_step_ids = {s.id for s in spec.branch_pipeline} | {s.id for s in spec.refine_loop}
+
+    for expand in spec.expand_rules:
+        # at_step_id can be "plan" for root-level expansion
+        if expand.at_step_id != "plan" and expand.at_step_id not in all_step_ids:
+            errors.append(f"Expand rule references unknown step '{expand.at_step_id}'")
+
+    # Check for duplicate step IDs
+    step_ids = [s.id for s in spec.branch_pipeline] + [s.id for s in spec.refine_loop]
+    seen: set[str] = set()
+    for sid in step_ids:
+        if sid in seen:
+            errors.append(f"Duplicate step ID: '{sid}'")
+        seen.add(sid)
+
+    # Check that branch_pipeline is not empty
+    if not spec.branch_pipeline:
+        errors.append("branch_pipeline cannot be empty")
+
+    return errors

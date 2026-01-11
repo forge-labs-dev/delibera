@@ -26,6 +26,7 @@ from delibera.gates import (
     needs_final_signoff_gate,
     needs_scope_gate,
 )
+from delibera.protocol import DEFAULT_PROTOCOL, ProtocolInterpreter, ProtocolSpec
 from delibera.tools import (
     PolicyEngine,
     ToolCallback,
@@ -41,13 +42,16 @@ from delibera.trace.writer import TraceWriter
 class Engine:
     """The deliberation engine orchestrator.
 
-    Implements the v0.4 protocol with deterministic stub agents:
+    Implements protocol-driven deliberation with deterministic stub agents.
+    The protocol specifies WHAT steps run; the engine applies operators.
+
+    Default protocol (simple_protocol):
     1. PLAN - Generate branch labels
     2. SCOPE GATE - User approves/vetoes branches (if gates enabled)
     3. EXPAND - Create child nodes
     4. PROPOSE - Generate proposals per branch (with optional tool use)
     5. VALIDATE - Extract and validate claims
-    6. PRUNE - Keep top-2 by epistemic quality
+    6. PRUNE - Keep top-k by epistemic quality
     7. REDUCE - Merge survivors
     8. FINAL SIGN-OFF GATE - User approves final output (if gates enabled)
     9. FINALIZE - Write artifact with claim_check_summary
@@ -60,6 +64,7 @@ class Engine:
         policy_engine: PolicyEngine | None = None,
         gate_handler: GateHandler | None = None,
         gates_enabled: bool = True,
+        protocol: ProtocolSpec | None = None,
     ) -> None:
         """Initialize the engine.
 
@@ -69,17 +74,20 @@ class Engine:
             policy_engine: Policy engine for tool access control.
             gate_handler: Handler for user gates. Defaults to AutoApproveGateHandler.
             gates_enabled: Whether gates are enabled. Defaults to True.
+            protocol: Protocol specification to use. Defaults to DEFAULT_PROTOCOL.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry()
         self._policy_engine = policy_engine or create_default_policy_engine()
         self._gate_handler = gate_handler or AutoApproveGateHandler()
         self._gates_enabled = gates_enabled
+        self._protocol = protocol or DEFAULT_PROTOCOL
 
         # These are set during run execution
         self._current_run_id: str = ""
         self._current_writer: TraceWriter | None = None
         self._tool_router: ToolRouter | None = None
+        self._interpreter: ProtocolInterpreter | None = None
 
     def run(self, question: str) -> Path:
         """Execute a full deliberation run.
@@ -124,13 +132,18 @@ class Engine:
                 policy_engine=self._policy_engine,
                 trace_emitter=self._emit_trace_event,
             )
+            self._interpreter = ProtocolInterpreter(self._protocol)
 
             # Emit run_start
             writer.emit(
                 TraceEvent(
                     event_type="run_start",
                     run_id=run_id,
-                    payload={"question": question, "created_at": created_at},
+                    payload={
+                        "question": question,
+                        "created_at": created_at,
+                        "protocol_name": self._protocol.name,
+                    },
                 )
             )
 
@@ -248,9 +261,11 @@ class Engine:
                     )
                 )
 
-            # PRUNE: Keep top-2 by epistemic quality
+            # PRUNE: Keep top-k by epistemic quality (from protocol)
             child_ids = [c.node_id for c in children]
-            survivor_ids, pruned_ids = operators.prune(tree, child_ids, keep_count=2)
+            # Note: _prune_rule reserved for future prune strategies (e.g., score_only)
+            keep_k, _prune_rule = self._interpreter.get_prune_spec()
+            survivor_ids, pruned_ids = operators.prune(tree, child_ids, keep_count=keep_k)
 
             writer.emit(
                 TraceEvent(
@@ -357,6 +372,7 @@ class Engine:
             self._current_run_id = ""
             self._current_writer = None
             self._tool_router = None
+            self._interpreter = None
 
     def _handle_scope_gate(
         self,
