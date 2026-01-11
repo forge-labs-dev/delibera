@@ -33,7 +33,6 @@ class ToolRouter:
         registry: ToolRegistry,
         policy_engine: PolicyEngine,
         trace_emitter: TraceEmitter | None = None,
-        run_id: str = "",
     ) -> None:
         """Initialize the tool router.
 
@@ -42,12 +41,10 @@ class ToolRouter:
             policy_engine: The policy engine for access control.
             trace_emitter: Optional callback for emitting trace events.
                 Signature: (event_type: str, payload: dict) -> None
-            run_id: The current run ID for trace events.
         """
         self._registry = registry
         self._policy = policy_engine
         self._trace_emitter = trace_emitter
-        self._run_id = run_id
 
     def call(
         self,

@@ -5,7 +5,6 @@ applies operators, enforces protocols, and determines convergence.
 """
 
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
 from delibera.tools import (
     PolicyEngine,
+    ToolCallback,
     ToolRegistry,
     ToolRouter,
     create_default_policy_engine,
@@ -23,9 +23,6 @@ from delibera.tools import (
 )
 from delibera.trace.events import TraceEvent
 from delibera.trace.writer import TraceWriter
-
-# Type alias for tool callback provided to agents
-ToolCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 class Engine:
@@ -104,7 +101,6 @@ class Engine:
                 registry=self._tool_registry,
                 policy_engine=self._policy_engine,
                 trace_emitter=self._emit_trace_event,
-                run_id=run_id,
             )
 
             # Emit run_start

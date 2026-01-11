@@ -1,10 +1,9 @@
 """Stub agents for v0 testing without LLMs."""
 
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-# Type alias for tool callback provided by engine
-ToolCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
+if TYPE_CHECKING:
+    from delibera.tools import ToolCallback
 
 
 class PlannerStub:
@@ -61,7 +60,7 @@ class ProposerStub:
     def execute(
         self,
         context: dict[str, Any],
-        tool: ToolCallback | None = None,
+        tool: "ToolCallback | None" = None,
     ) -> dict[str, Any]:
         """Generate a proposal for a branch.
 

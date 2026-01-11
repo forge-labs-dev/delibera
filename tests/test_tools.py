@@ -26,111 +26,111 @@ from delibera.tools.builtin.calculator import CalculatorTool
 class TestCalculatorTool:
     """Tests for the calculator tool."""
 
-    def test_simple_addition(self) -> None:
+    def test_simple_addition(self):
         """Test simple addition."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "1+2"})
         assert result == {"result": 3}
 
-    def test_simple_subtraction(self) -> None:
+    def test_simple_subtraction(self):
         """Test simple subtraction."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "10-3"})
         assert result == {"result": 7}
 
-    def test_simple_multiplication(self) -> None:
+    def test_simple_multiplication(self):
         """Test simple multiplication."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "4*5"})
         assert result == {"result": 20}
 
-    def test_simple_division(self) -> None:
+    def test_simple_division(self):
         """Test simple division."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "15/3"})
         assert result == {"result": 5.0}
 
-    def test_operator_precedence(self) -> None:
+    def test_operator_precedence(self):
         """Test operator precedence (multiplication before addition)."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "1+2*3"})
         assert result == {"result": 7}
 
-    def test_parentheses(self) -> None:
+    def test_parentheses(self):
         """Test parentheses override precedence."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "(1+2)*3"})
         assert result == {"result": 9}
 
-    def test_power_operator(self) -> None:
+    def test_power_operator(self):
         """Test power operator."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "2**3"})
         assert result == {"result": 8}
 
-    def test_modulo_operator(self) -> None:
+    def test_modulo_operator(self):
         """Test modulo operator."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "10%3"})
         assert result == {"result": 1}
 
-    def test_negative_numbers(self) -> None:
+    def test_negative_numbers(self):
         """Test negative numbers."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "-5+3"})
         assert result == {"result": -2}
 
-    def test_float_numbers(self) -> None:
+    def test_float_numbers(self):
         """Test floating point numbers."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "0.75+0.05"})
         assert result == {"result": 0.8}
 
-    def test_complex_expression(self) -> None:
+    def test_complex_expression(self):
         """Test complex nested expression."""
         calc = CalculatorTool()
         result = calc.execute({"expression": "((10+5)*2)/3"})
         assert result == {"result": 10.0}
 
-    def test_division_by_zero_raises(self) -> None:
+    def test_division_by_zero_raises(self):
         """Test division by zero raises error."""
         calc = CalculatorTool()
         with pytest.raises(ToolExecutionError) as exc_info:
             calc.execute({"expression": "1/0"})
         assert "Division by zero" in str(exc_info.value)
 
-    def test_invalid_expression_raises(self) -> None:
+    def test_invalid_expression_raises(self):
         """Test invalid expression raises error."""
         calc = CalculatorTool()
         with pytest.raises(ToolExecutionError):
             calc.execute({"expression": "1+"})
 
-    def test_function_call_rejected(self) -> None:
+    def test_function_call_rejected(self):
         """Test function calls are rejected."""
         calc = CalculatorTool()
         with pytest.raises(ToolExecutionError):
             calc.execute({"expression": "eval('1+1')"})
 
-    def test_variable_rejected(self) -> None:
+    def test_variable_rejected(self):
         """Test variable references are rejected."""
         calc = CalculatorTool()
         with pytest.raises(ToolExecutionError):
             calc.execute({"expression": "x+1"})
 
-    def test_missing_expression_raises(self) -> None:
+    def test_missing_expression_raises(self):
         """Test missing expression field raises error."""
         calc = CalculatorTool()
         with pytest.raises(ValueError) as exc_info:
             calc.validate_input({})
         assert "expression" in str(exc_info.value)
 
-    def test_empty_expression_raises(self) -> None:
+    def test_empty_expression_raises(self):
         """Test empty expression raises error."""
         calc = CalculatorTool()
         with pytest.raises(ValueError):
             calc.validate_input({"expression": ""})
 
-    def test_tool_properties(self) -> None:
+    def test_tool_properties(self):
         """Test tool has correct properties."""
         calc = CalculatorTool()
         assert calc.name == "calculator"
@@ -141,7 +141,7 @@ class TestCalculatorTool:
 class TestToolRegistry:
     """Tests for the tool registry."""
 
-    def test_register_and_get(self) -> None:
+    def test_register_and_get(self):
         """Test registering and retrieving a tool."""
         registry = ToolRegistry()
         calc = CalculatorTool()
@@ -150,7 +150,7 @@ class TestToolRegistry:
         retrieved = registry.get("calculator")
         assert retrieved.name == "calculator"
 
-    def test_duplicate_registration_raises(self) -> None:
+    def test_duplicate_registration_raises(self):
         """Test duplicate registration raises error."""
         registry = ToolRegistry()
         calc = CalculatorTool()
@@ -160,13 +160,13 @@ class TestToolRegistry:
             registry.register(calc)
         assert "already registered" in str(exc_info.value)
 
-    def test_get_unregistered_raises(self) -> None:
+    def test_get_unregistered_raises(self):
         """Test getting unregistered tool raises error."""
         registry = ToolRegistry()
         with pytest.raises(KeyError):
             registry.get("nonexistent")
 
-    def test_has_tool(self) -> None:
+    def test_has_tool(self):
         """Test checking if tool is registered."""
         registry = ToolRegistry()
         assert registry.has("calculator") is False
@@ -174,7 +174,7 @@ class TestToolRegistry:
         registry.register(CalculatorTool())
         assert registry.has("calculator") is True
 
-    def test_list_tools(self) -> None:
+    def test_list_tools(self):
         """Test listing registered tools."""
         registry = ToolRegistry()
         assert registry.list_tools() == []
@@ -182,7 +182,7 @@ class TestToolRegistry:
         registry.register(CalculatorTool())
         assert "calculator" in registry.list_tools()
 
-    def test_create_default_registry(self) -> None:
+    def test_create_default_registry(self):
         """Test creating default registry includes calculator."""
         registry = create_default_registry()
         assert registry.has("calculator")
@@ -191,13 +191,13 @@ class TestToolRegistry:
 class TestPolicyEngine:
     """Tests for the policy engine."""
 
-    def test_global_policy_empty_allows_all(self) -> None:
+    def test_global_policy_empty_allows_all(self):
         """Test empty enabled_tools allows all tools."""
         engine = PolicyEngine(global_policy=GlobalPolicy())
         decision = engine.evaluate("any_role", "any_step", "calculator")
         assert decision.allow is True
 
-    def test_global_policy_allowlist(self) -> None:
+    def test_global_policy_allowlist(self):
         """Test enabled_tools allowlist."""
         engine = PolicyEngine(global_policy=GlobalPolicy(enabled_tools={"calculator"}))
 
@@ -208,7 +208,7 @@ class TestPolicyEngine:
         assert denied.allow is False
         assert "not in enabled_tools" in denied.reason
 
-    def test_role_policy(self) -> None:
+    def test_role_policy(self):
         """Test role-based policy."""
         engine = PolicyEngine(role_policy=RolePolicy(role_tools={"researcher": {"web.search"}}))
 
@@ -224,7 +224,7 @@ class TestPolicyEngine:
         unrestricted = engine.evaluate("planner", "any", "calculator")
         assert unrestricted.allow is True
 
-    def test_step_override_claim_check(self) -> None:
+    def test_step_override_claim_check(self):
         """Test CLAIM_CHECK step denies discovery tools."""
         engine = PolicyEngine(
             step_override=StepPolicyOverride(evidence_local_steps={"CLAIM_CHECK"})
@@ -250,7 +250,7 @@ class TestPolicyEngine:
         )
         assert allowed.allow is True
 
-    def test_budget_constraint(self) -> None:
+    def test_budget_constraint(self):
         """Test budget constraint enforcement."""
         engine = PolicyEngine(global_policy=GlobalPolicy(max_calls=2))
 
@@ -263,7 +263,7 @@ class TestPolicyEngine:
         assert decision.allow is False
         assert "max calls" in decision.reason
 
-    def test_budget_tracking(self) -> None:
+    def test_budget_tracking(self):
         """Test budget state tracking."""
         engine = PolicyEngine(global_policy=GlobalPolicy(max_calls=10))
 
@@ -276,7 +276,7 @@ class TestPolicyEngine:
         assert info["calls_by_tool"]["calculator"] == 2
         assert info["calls_by_tool"]["other_tool"] == 1
 
-    def test_create_default_policy_engine(self) -> None:
+    def test_create_default_policy_engine(self):
         """Test default policy engine allows calculator."""
         engine = create_default_policy_engine()
         decision = engine.evaluate("proposer", "PROPOSE", "calculator")
@@ -286,7 +286,7 @@ class TestPolicyEngine:
 class TestToolRouter:
     """Tests for the tool router."""
 
-    def test_router_executes_allowed_tool(self) -> None:
+    def test_router_executes_allowed_tool(self):
         """Test router executes tool when policy allows."""
         registry = create_default_registry()
         policy = create_default_policy_engine()
@@ -295,7 +295,7 @@ class TestToolRouter:
         result = router.call("proposer", "PROPOSE", "calculator", {"expression": "1+1"})
         assert result == {"result": 2}
 
-    def test_router_denies_when_tool_not_registered(self) -> None:
+    def test_router_denies_when_tool_not_registered(self):
         """Test router raises when tool is not registered."""
         registry = ToolRegistry()  # Empty registry
         policy = PolicyEngine()
@@ -305,7 +305,7 @@ class TestToolRouter:
             router.call("any", "any", "calculator", {"expression": "1+1"})
         assert "not registered" in str(exc_info.value)
 
-    def test_router_denies_when_policy_denies(self) -> None:
+    def test_router_denies_when_policy_denies(self):
         """Test router raises ToolDenied when policy denies."""
         registry = create_default_registry()
         policy = PolicyEngine(
@@ -320,17 +320,17 @@ class TestToolRouter:
         assert exc_info.value.tool_name == "calculator"
         assert "not in enabled_tools" in exc_info.value.reason
 
-    def test_router_emits_trace_events(self) -> None:
+    def test_router_emits_trace_events(self):
         """Test router emits trace events."""
         registry = create_default_registry()
         policy = create_default_policy_engine()
 
         events: list[tuple[str, dict[str, Any]]] = []
 
-        def emitter(event_type: str, payload: dict[str, Any]) -> None:
+        def emitter(event_type: str, payload: dict[str, Any]):
             events.append((event_type, payload))
 
-        router = ToolRouter(registry, policy, trace_emitter=emitter, run_id="test123")
+        router = ToolRouter(registry, policy, trace_emitter=emitter)
 
         router.call("proposer", "PROPOSE", "calculator", {"expression": "2+2"}, node_id="node1")
 
@@ -349,14 +349,14 @@ class TestToolRouter:
         assert events[1][1]["output"] == {"result": 4}
         assert events[1][1]["policy_decision"]["allow"] is True
 
-    def test_router_emits_denied_event(self) -> None:
+    def test_router_emits_denied_event(self):
         """Test router emits denied event on policy denial."""
         registry = create_default_registry()
         policy = PolicyEngine(global_policy=GlobalPolicy(enabled_tools={"web.search"}))
 
         events: list[tuple[str, dict[str, Any]]] = []
 
-        def emitter(event_type: str, payload: dict[str, Any]) -> None:
+        def emitter(event_type: str, payload: dict[str, Any]):
             events.append((event_type, payload))
 
         router = ToolRouter(registry, policy, trace_emitter=emitter)
@@ -370,11 +370,28 @@ class TestToolRouter:
         assert events[1][0] == "tool_call_denied"
         assert "not in enabled_tools" in events[1][1]["reason"]
 
+    def test_router_budget_not_incremented_on_validation_failure(self):
+        """Test that budget is not incremented when input validation fails."""
+        registry = create_default_registry()
+        policy = create_default_policy_engine()
+        router = ToolRouter(registry, policy)
+
+        # Successful call should increment budget
+        router.call("any", "any", "calculator", {"expression": "1+1"})
+        assert policy.budget_state.total_calls == 1
+
+        # Validation failure should NOT increment budget
+        with pytest.raises(ToolExecutionError):
+            router.call("any", "any", "calculator", {"expression": ""})  # Empty expression
+
+        # Budget should still be 1
+        assert policy.budget_state.total_calls == 1
+
 
 class TestToolRouterIntegration:
     """Integration tests for tool router with engine."""
 
-    def test_proposer_uses_calculator(self, tmp_path: Path) -> None:
+    def test_proposer_uses_calculator(self, tmp_path: Path):
         """Test that proposer stub uses calculator via tool callback."""
         from delibera.engine.orchestrator import Engine
 
@@ -408,7 +425,7 @@ class TestToolRouterIntegration:
         for event in executed:
             assert "result" in event["payload"]["output"]
 
-    def test_tool_call_denied_logged(self, tmp_path: Path) -> None:
+    def test_tool_call_denied_logged(self, tmp_path: Path):
         """Test that denied tool calls are logged in trace."""
         from delibera.engine.orchestrator import Engine
         from delibera.tools import GlobalPolicy
@@ -441,7 +458,7 @@ class TestToolRouterIntegration:
             assert event["payload"]["tool_name"] == "calculator"
             assert "not in enabled_tools" in event["payload"]["reason"]
 
-    def test_claim_check_step_allows_calculator(self, tmp_path: Path) -> None:
+    def test_claim_check_step_allows_calculator(self, tmp_path: Path):
         """Test that calculator is allowed during CLAIM_CHECK step."""
         from delibera.engine.orchestrator import Engine
 
@@ -461,7 +478,7 @@ class TestToolRouterIntegration:
 class TestPolicyDecision:
     """Tests for PolicyDecision dataclass."""
 
-    def test_to_dict(self) -> None:
+    def test_to_dict(self):
         """Test converting decision to dictionary."""
         decision = PolicyDecision(allow=True, reason="test reason")
         d = decision.to_dict()

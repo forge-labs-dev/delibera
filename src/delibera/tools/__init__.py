@@ -3,6 +3,9 @@
 Provides governed tool access with policy enforcement and tracing.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 from delibera.tools.policy import (
     BudgetState,
     GlobalPolicy,
@@ -15,6 +18,9 @@ from delibera.tools.policy import (
 from delibera.tools.registry import ToolRegistry, create_default_registry
 from delibera.tools.router import ToolRouter
 from delibera.tools.spec import RiskLevel, ToolDenied, ToolExecutionError, ToolSpec
+
+# Type alias for tool callback provided to agents
+ToolCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 __all__ = [
     # Spec
@@ -35,4 +41,6 @@ __all__ = [
     "create_default_policy_engine",
     # Router
     "ToolRouter",
+    # Type aliases
+    "ToolCallback",
 ]
