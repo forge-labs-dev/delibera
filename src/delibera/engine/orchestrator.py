@@ -13,6 +13,19 @@ from delibera.agents.stub import PlannerStub, ProposerStub
 from delibera.engine import operators
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
+from delibera.gates import (
+    GATE_ALLOWED_ACTIONS,
+    AutoApproveGateHandler,
+    GateAborted,
+    GateHandler,
+    GateSummary,
+    GateType,
+    apply_final_signoff_response,
+    apply_scope_response,
+    get_response_changes,
+    needs_final_signoff_gate,
+    needs_scope_gate,
+)
 from delibera.tools import (
     PolicyEngine,
     ToolCallback,
@@ -28,14 +41,16 @@ from delibera.trace.writer import TraceWriter
 class Engine:
     """The deliberation engine orchestrator.
 
-    Implements the v0.3 protocol with deterministic stub agents:
+    Implements the v0.4 protocol with deterministic stub agents:
     1. PLAN - Generate branch labels
-    2. EXPAND - Create child nodes
-    3. PROPOSE - Generate proposals per branch (with optional tool use)
-    4. VALIDATE - Extract and validate claims
-    5. PRUNE - Keep top-2 by epistemic quality
-    6. REDUCE - Merge survivors
-    7. FINALIZE - Write artifact with claim_check_summary
+    2. SCOPE GATE - User approves/vetoes branches (if gates enabled)
+    3. EXPAND - Create child nodes
+    4. PROPOSE - Generate proposals per branch (with optional tool use)
+    5. VALIDATE - Extract and validate claims
+    6. PRUNE - Keep top-2 by epistemic quality
+    7. REDUCE - Merge survivors
+    8. FINAL SIGN-OFF GATE - User approves final output (if gates enabled)
+    9. FINALIZE - Write artifact with claim_check_summary
     """
 
     def __init__(
@@ -43,6 +58,8 @@ class Engine:
         runs_dir: Path | None = None,
         tool_registry: ToolRegistry | None = None,
         policy_engine: PolicyEngine | None = None,
+        gate_handler: GateHandler | None = None,
+        gates_enabled: bool = True,
     ) -> None:
         """Initialize the engine.
 
@@ -50,10 +67,14 @@ class Engine:
             runs_dir: Directory for run outputs. Defaults to ./runs.
             tool_registry: Tool registry for available tools.
             policy_engine: Policy engine for tool access control.
+            gate_handler: Handler for user gates. Defaults to AutoApproveGateHandler.
+            gates_enabled: Whether gates are enabled. Defaults to True.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry()
         self._policy_engine = policy_engine or create_default_policy_engine()
+        self._gate_handler = gate_handler or AutoApproveGateHandler()
+        self._gates_enabled = gates_enabled
 
         # These are set during run execution
         self._current_run_id: str = ""
@@ -71,6 +92,7 @@ class Engine:
 
         Raises:
             ValueError: If question is empty or whitespace-only.
+            GateAborted: If user aborts through a gate.
         """
         if not question or not question.strip():
             raise ValueError("Question cannot be empty")
@@ -142,8 +164,16 @@ class Engine:
                 )
             )
 
-            # EXPAND: Create child nodes
+            # SCOPE GATE: Get user approval for branches
             branch_labels = plan_output["branches"]
+            if needs_scope_gate(plan_output, self._gates_enabled):
+                branch_labels = self._handle_scope_gate(
+                    question=question,
+                    branch_labels=branch_labels,
+                    node_id=root.node_id,
+                )
+
+            # EXPAND: Create child nodes
             children = operators.expand(tree, root.node_id, branch_labels)
 
             writer.emit(
@@ -262,8 +292,17 @@ class Engine:
                 )
             )
 
-            # FINALIZE: Build and write artifact
+            # Build artifact for sign-off
             artifact = operators.finalize(state, merged_node)
+
+            # FINAL SIGN-OFF GATE: Get user approval for final output
+            if needs_final_signoff_gate(artifact, self._gates_enabled):
+                self._handle_final_signoff_gate(
+                    artifact=artifact,
+                    node_id=merged_node.node_id,
+                )
+
+            # FINALIZE: Write artifact
             writer.write_artifact(artifact)
 
             writer.emit(
@@ -285,6 +324,22 @@ class Engine:
 
             return run_dir
 
+        except GateAborted as e:
+            # Emit aborted status
+            if writer is not None:
+                writer.emit(
+                    TraceEvent(
+                        event_type="run_end",
+                        run_id=run_id,
+                        payload={
+                            "status": "aborted",
+                            "gate_type": e.gate_type.value,
+                            "message": e.message,
+                        },
+                    )
+                )
+            raise
+
         except Exception as e:
             # Emit run_end with failed status on any error (only if writer initialized)
             if writer is not None:
@@ -302,6 +357,118 @@ class Engine:
             self._current_run_id = ""
             self._current_writer = None
             self._tool_router = None
+
+    def _handle_scope_gate(
+        self,
+        question: str,
+        branch_labels: list[str],
+        node_id: str,
+    ) -> list[str]:
+        """Handle the scope gate after PLAN.
+
+        Args:
+            question: The original question.
+            branch_labels: Proposed branch labels from planner.
+            node_id: The root node ID.
+
+        Returns:
+            Updated branch labels after user response.
+
+        Raises:
+            GateAborted: If user chooses to abort.
+        """
+        # Build summary
+        summary = GateSummary(
+            gate_type=GateType.SCOPE,
+            allowed_actions=GATE_ALLOWED_ACTIONS[GateType.SCOPE],
+            interpreted_question=question,
+            proposed_branches=branch_labels,
+        )
+
+        # Emit gate_triggered
+        self._emit_trace_event(
+            "gate_triggered",
+            {
+                "gate_type": GateType.SCOPE.value,
+                "summary": summary.to_dict(),
+                "node_id": node_id,
+            },
+        )
+
+        # Get response from handler
+        response = self._gate_handler.handle(summary)
+
+        # Apply response
+        updated_labels = apply_scope_response(response, branch_labels)
+
+        # Emit gate_response_applied
+        changes = get_response_changes(
+            GateType.SCOPE,
+            response,
+            context={"original_branches": branch_labels},
+        )
+        self._emit_trace_event(
+            "gate_response_applied",
+            {
+                "gate_type": GateType.SCOPE.value,
+                "response": response.to_dict(),
+                "changes": changes,
+                "node_id": node_id,
+            },
+        )
+
+        return updated_labels
+
+    def _handle_final_signoff_gate(
+        self,
+        artifact: dict[str, Any],
+        node_id: str,
+    ) -> None:
+        """Handle the final sign-off gate before writing artifact.
+
+        Args:
+            artifact: The final artifact to approve.
+            node_id: The merged node ID.
+
+        Raises:
+            GateAborted: If user chooses to abort.
+        """
+        # Build summary
+        summary = GateSummary(
+            gate_type=GateType.FINAL_SIGNOFF,
+            allowed_actions=GATE_ALLOWED_ACTIONS[GateType.FINAL_SIGNOFF],
+            recommendation=artifact.get("recommendation", ""),
+            claim_check_summary=artifact.get("claim_check_summary"),
+            open_questions=artifact.get("open_questions", []),
+        )
+
+        # Emit gate_triggered
+        self._emit_trace_event(
+            "gate_triggered",
+            {
+                "gate_type": GateType.FINAL_SIGNOFF.value,
+                "summary": summary.to_dict(),
+                "node_id": node_id,
+            },
+        )
+
+        # Get response from handler
+        response = self._gate_handler.handle(summary)
+
+        # Apply response (may raise GateAborted)
+        apply_final_signoff_response(response)
+
+        # Emit gate_response_applied
+        changes = get_response_changes(GateType.FINAL_SIGNOFF, response)
+        self._emit_trace_event(
+            "gate_response_applied",
+            {
+                "gate_type": GateType.FINAL_SIGNOFF.value,
+                "response": response.to_dict(),
+                "changes": changes,
+                "node_id": node_id,
+            },
+        )
 
     def _generate_run_id(self) -> str:
         """Generate a unique, filesystem-safe run ID."""
