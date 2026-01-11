@@ -29,6 +29,7 @@ class PlannerStub:
                 f"Option C: Conservative approach to '{question[:30]}...'",
             ],
             "role": "planner",
+            "step": "PLAN",
         }
 
 
@@ -110,3 +111,37 @@ class ProposerStub:
             output["confidence_computed_by"] = "calculator"
 
         return output
+
+
+class SubplannerStub:
+    """Stub subplanner that returns deterministic sub-branch labels.
+
+    For 2-level expansion, each option generates 2 subplans.
+    """
+
+    def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Generate sub-branch labels for second-level expansion.
+
+        Args:
+            context: Must contain "label" key with parent option label.
+
+        Returns:
+            Dict with "sub_branches" key containing list of subplan labels.
+        """
+        label = context.get("label", "Unknown")
+
+        # Extract option letter from parent label
+        option_letter = "X"
+        for letter in ["A", "B", "C"]:
+            if f"Option {letter}" in label:
+                option_letter = letter
+                break
+
+        return {
+            "sub_branches": [
+                f"Subplan {option_letter}.1: Detailed implementation",
+                f"Subplan {option_letter}.2: Alternative approach",
+            ],
+            "role": "subplanner",
+            "step": "SUBPLAN",
+        }
