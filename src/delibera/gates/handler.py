@@ -138,6 +138,27 @@ class CLIGateHandler(GateHandler):
             for i, branch in enumerate(summary.proposed_branches, 1):
                 click.echo(f"  {i}. {branch}")
 
+        elif summary.gate_type == GateType.TRADEOFF:
+            click.echo("\nNear-tie detected between top branches!")
+            if summary.score_difference is not None:
+                click.echo(f"Score difference: {summary.score_difference:.3f}")
+
+            click.echo("\nTop candidates:")
+            for candidate in summary.top_candidates:
+                click.echo(f"\n  {candidate.label}:")
+                click.echo(f"    Score: {candidate.score:.3f}")
+                click.echo("    Metrics:")
+                for key, value in candidate.metrics.items():
+                    if isinstance(value, float) and value == int(value):
+                        click.echo(f"      {key}: {int(value)}")
+                    else:
+                        click.echo(f"      {key}: {value:.2f}")
+
+            if summary.current_weights:
+                click.echo("\nCurrent weights:")
+                for key, value in summary.current_weights.items():
+                    click.echo(f"  {key}: {value}")
+
         elif summary.gate_type == GateType.FINAL_SIGNOFF:
             click.echo(f"\nRecommendation: {summary.recommendation}")
 
@@ -150,6 +171,11 @@ class CLIGateHandler(GateHandler):
                 click.echo("\nOpen questions:")
                 for q in summary.open_questions:
                     click.echo(f"  - {q}")
+
+            if summary.open_blocking_objections:
+                click.echo("\nOpen blocking objections (must accept to approve):")
+                for obj in summary.open_blocking_objections:
+                    click.echo(f"  [{obj['objection_id']}] {obj['rationale']}")
 
         click.echo("\nAllowed actions:")
         for action in summary.allowed_actions:
@@ -165,17 +191,29 @@ class CLIGateHandler(GateHandler):
             click.echo("  'approve' - Accept proposed branches")
             click.echo("  'veto <branch1,branch2,...>' - Remove specific branches")
             click.echo("  'abort' - Cancel the run")
+        elif summary.gate_type == GateType.TRADEOFF:
+            click.echo("  'approve_default' - Keep default weights and continue")
+            click.echo("  'set_weights <key>=<value>,...' - Override weights")
+            click.echo("    (e.g., 'set_weights evidence_coverage=2.0,weak_claims=-0.5')")
+            click.echo("  'abort' - Cancel the run")
         elif summary.gate_type == GateType.FINAL_SIGNOFF:
-            click.echo("  'approve' - Accept and finalize")
+            if summary.open_blocking_objections:
+                click.echo("  'accept_objections <id1,id2,...>' - Accept specified objections")
+            click.echo("  'approve' - Accept and finalize (only if no blocking objections)")
             click.echo("  'abort' - Cancel the run")
 
-        user_input = click.prompt(">", type=str).strip().lower()
+        user_input = click.prompt(">", type=str).strip()
 
-        if user_input == "approve":
+        # Handle case-insensitive commands
+        user_input_lower = user_input.lower()
+
+        if user_input_lower == "approve":
             return GateResponse(action=AllowedAction.APPROVE)
-        elif user_input == "abort":
+        elif user_input_lower == "approve_default":
+            return GateResponse(action=AllowedAction.APPROVE_DEFAULT)
+        elif user_input_lower == "abort":
             return GateResponse(action=AllowedAction.ABORT)
-        elif user_input.startswith("veto "):
+        elif user_input_lower.startswith("veto "):
             # Parse comma-separated branch labels
             branches_str = user_input[5:].strip()
             branches = [b.strip() for b in branches_str.split(",") if b.strip()]
@@ -183,11 +221,48 @@ class CLIGateHandler(GateHandler):
                 action=AllowedAction.VETO_BRANCHES,
                 parameters={"branches": branches},
             )
-        elif user_input == "veto":
+        elif user_input_lower == "veto":
             # Veto without branches - will fail validation, prompting retry
             return GateResponse(
                 action=AllowedAction.VETO_BRANCHES,
                 parameters={"branches": []},
+            )
+        elif user_input_lower.startswith("set_weights "):
+            # Parse key=value pairs
+            weights_str = user_input[12:].strip()
+            weights: dict[str, float] = {}
+            for pair in weights_str.split(","):
+                pair = pair.strip()
+                if "=" in pair:
+                    key, value = pair.split("=", 1)
+                    try:
+                        weights[key.strip()] = float(value.strip())
+                    except ValueError:
+                        click.echo(f"Invalid weight value: '{value}'. Must be a number.")
+                        return self._collect_response(summary)
+            return GateResponse(
+                action=AllowedAction.SET_WEIGHTS,
+                parameters={"weights": weights},
+            )
+        elif user_input_lower == "set_weights":
+            # set_weights without values - will fail validation
+            return GateResponse(
+                action=AllowedAction.SET_WEIGHTS,
+                parameters={"weights": {}},
+            )
+        elif user_input_lower.startswith("accept_objections "):
+            # Parse comma-separated objection IDs
+            ids_str = user_input[18:].strip()
+            objection_ids = [oid.strip() for oid in ids_str.split(",") if oid.strip()]
+            return GateResponse(
+                action=AllowedAction.ACCEPT_OBJECTIONS,
+                parameters={"objection_ids": objection_ids},
+            )
+        elif user_input_lower == "accept_objections":
+            # accept_objections without IDs - will fail validation
+            return GateResponse(
+                action=AllowedAction.ACCEPT_OBJECTIONS,
+                parameters={"objection_ids": []},
             )
         else:
             click.echo(f"Unknown command: '{user_input}'. Please try again.")

@@ -38,6 +38,7 @@ class TestProtocolSpec:
         """Test that max_children must be positive."""
         with pytest.raises(ValueError, match="max_children must be > 0"):
             ExpandSpec(
+                id="expand_options",
                 at_step_id="plan",
                 child_kind="option",
                 max_children=0,
@@ -49,11 +50,39 @@ class TestProtocolSpec:
         """Test that depth must be positive."""
         with pytest.raises(ValueError, match="depth must be > 0"):
             ExpandSpec(
+                id="expand_options",
                 at_step_id="plan",
                 child_kind="option",
                 max_children=3,
                 depth=0,
                 source="planner_output",
+            )
+
+    def test_expand_spec_id_required(self) -> None:
+        """Test that expand spec id cannot be empty."""
+        with pytest.raises(ValueError, match="id cannot be empty"):
+            ExpandSpec(
+                id="",
+                at_step_id="plan",
+                child_kind="option",
+                max_children=3,
+                depth=1,
+                source="planner_output",
+            )
+
+    def test_protocol_version_required(self) -> None:
+        """Test that protocol_version cannot be empty."""
+        with pytest.raises(ValueError, match="version cannot be empty"):
+            ProtocolSpec(
+                name="test",
+                protocol_version="",
+                max_depth=1,
+                expand_rules=[],
+                branch_pipeline=[
+                    StepSpec(id="propose", kind="work", step_name="PROPOSE", role="proposer")
+                ],
+                prune=PruneSpec(rule="epistemic_then_score", keep_k=2),
+                reduce=ReduceSpec(rule="merge_artifacts"),
             )
 
     def test_prune_spec_keep_k_positive(self) -> None:
@@ -71,6 +100,7 @@ class TestProtocolSpec:
         with pytest.raises(ValueError, match="max_depth must be > 0"):
             ProtocolSpec(
                 name="test",
+                protocol_version="v1",
                 max_depth=0,
                 expand_rules=[],
                 branch_pipeline=[
@@ -85,6 +115,7 @@ class TestProtocolSpec:
         with pytest.raises(ValueError, match="name cannot be empty"):
             ProtocolSpec(
                 name="",
+                protocol_version="v1",
                 max_depth=1,
                 expand_rules=[],
                 branch_pipeline=[
@@ -99,9 +130,11 @@ class TestProtocolSpec:
         with pytest.raises(ValueError, match="exceeding max_depth"):
             ProtocolSpec(
                 name="test",
+                protocol_version="v1",
                 max_depth=1,
                 expand_rules=[
                     ExpandSpec(
+                        id="expand_options",
                         at_step_id="plan",
                         child_kind="option",
                         max_children=3,
@@ -129,9 +162,11 @@ class TestProtocolValidation:
         """Test that expand rules referencing unknown steps are caught."""
         spec = ProtocolSpec(
             name="test",
+            protocol_version="v1",
             max_depth=1,
             expand_rules=[
                 ExpandSpec(
+                    id="expand_options",
                     at_step_id="unknown_step",  # This step doesn't exist
                     child_kind="option",
                     max_children=3,
@@ -153,6 +188,7 @@ class TestProtocolValidation:
         """Test that duplicate step IDs are caught."""
         spec = ProtocolSpec(
             name="test",
+            protocol_version="v1",
             max_depth=1,
             expand_rules=[],
             branch_pipeline=[
@@ -170,6 +206,7 @@ class TestProtocolValidation:
         """Test that empty branch_pipeline is caught."""
         spec = ProtocolSpec(
             name="test",
+            protocol_version="v1",
             max_depth=1,
             expand_rules=[],
             branch_pipeline=[],  # Empty
@@ -192,7 +229,7 @@ class TestProtocolDefaults:
         assert len(spec.expand_rules) == 1
         assert spec.expand_rules[0].at_step_id == "plan"
         assert spec.expand_rules[0].max_children == 3
-        assert len(spec.branch_pipeline) == 3  # propose, research, validate
+        assert len(spec.branch_pipeline) == 4  # propose, research, validate, redteam
         assert spec.prune.keep_k == 2
 
     def test_tree_protocol_v1_structure(self) -> None:
@@ -290,6 +327,9 @@ class TestProtocolInterpreter:
         assert step is not None
         assert step.id == "validate"
         step = interpreter.get_branch_pipeline_step(3)
+        assert step is not None
+        assert step.id == "redteam"
+        step = interpreter.get_branch_pipeline_step(4)
         assert step is None  # Out of bounds
 
 
@@ -313,9 +353,11 @@ class TestDefaultProtocolRuns:
         # Create a protocol with keep_k=1 instead of 2
         custom_protocol = ProtocolSpec(
             name="keep_one",
+            protocol_version="v1",
             max_depth=1,
             expand_rules=[
                 ExpandSpec(
+                    id="expand_options",
                     at_step_id="plan",
                     child_kind="option",
                     max_children=3,
@@ -348,3 +390,357 @@ class TestDefaultProtocolRuns:
             # With keep_k=1, only 1 survivor, 2 pruned
             assert len(prune_events[0]["payload"]["survivor_ids"]) == 1
             assert len(prune_events[0]["payload"]["pruned_ids"]) == 2
+
+
+class TestYAMLLoader:
+    """Tests for YAML protocol loading."""
+
+    def test_load_protocol_from_yaml_valid(self, tmp_path: Path) -> None:
+        """Test loading a valid YAML protocol file."""
+        from delibera.protocol import load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+protocol_version: v1
+max_depth: 1
+gates_enabled: true
+
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+    source: planner_output
+
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+  - id: validate
+    kind: validate
+    step_name: VALIDATE
+
+refine_loop: []
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+
+convergence:
+  max_rounds: 0
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        spec = load_protocol_from_yaml(yaml_file)
+
+        assert spec.name == "test_protocol"
+        assert spec.protocol_version == "v1"
+        assert spec.max_depth == 1
+        assert spec.gates_enabled is True
+        assert len(spec.expand_rules) == 1
+        assert spec.expand_rules[0].id == "expand_options"
+        assert len(spec.branch_pipeline) == 2
+        assert spec.prune.keep_k == 2
+
+    def test_load_protocol_from_yaml_file_not_found(self, tmp_path: Path) -> None:
+        """Test loading a non-existent YAML file raises FileNotFoundError."""
+        from delibera.protocol import load_protocol_from_yaml
+
+        with pytest.raises(FileNotFoundError, match="not found"):
+            load_protocol_from_yaml(tmp_path / "nonexistent.yaml")
+
+    def test_load_protocol_from_yaml_invalid_yaml(self, tmp_path: Path) -> None:
+        """Test loading invalid YAML syntax raises ProtocolLoadError."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_file = tmp_path / "invalid.yaml"
+        yaml_file.write_text("name: [invalid\n")
+
+        with pytest.raises(ProtocolLoadError, match="Invalid YAML"):
+            load_protocol_from_yaml(yaml_file)
+
+    def test_load_protocol_from_yaml_missing_required_key(self, tmp_path: Path) -> None:
+        """Test loading YAML with missing required key raises ProtocolLoadError."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+# missing protocol_version
+max_depth: 1
+
+expand_rules: []
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        with pytest.raises(ProtocolLoadError, match="Missing required key"):
+            load_protocol_from_yaml(yaml_file)
+
+    def test_load_protocol_from_yaml_unknown_key(self, tmp_path: Path) -> None:
+        """Test loading YAML with unknown key raises ProtocolLoadError."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+protocol_version: v1
+max_depth: 1
+unknown_key: value
+
+expand_rules: []
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        with pytest.raises(ProtocolLoadError, match="Unknown key"):
+            load_protocol_from_yaml(yaml_file)
+
+    def test_load_protocol_from_yaml_invalid_step_kind(self, tmp_path: Path) -> None:
+        """Test loading YAML with invalid step kind raises ProtocolLoadError."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+protocol_version: v1
+max_depth: 1
+
+expand_rules: []
+branch_pipeline:
+  - id: propose
+    kind: invalid_kind
+    step_name: PROPOSE
+    role: proposer
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        with pytest.raises(ProtocolLoadError, match="Invalid step kind"):
+            load_protocol_from_yaml(yaml_file)
+
+    def test_load_protocol_from_yaml_invalid_child_kind(self, tmp_path: Path) -> None:
+        """Test loading YAML with invalid child_kind raises ProtocolLoadError."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+protocol_version: v1
+max_depth: 1
+
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: invalid_kind
+    max_children: 3
+    depth: 1
+    source: planner_output
+
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        with pytest.raises(ProtocolLoadError, match="Invalid child_kind"):
+            load_protocol_from_yaml(yaml_file)
+
+    def test_load_builtin_tree_v1_yaml(self) -> None:
+        """Test loading the builtin tree_v1.yaml protocol."""
+        from delibera.protocol import load_protocol_from_yaml
+
+        yaml_path = Path(__file__).parent.parent / "protocols" / "tree_v1.yaml"
+        if not yaml_path.exists():
+            pytest.skip("protocols/tree_v1.yaml not found")
+
+        spec = load_protocol_from_yaml(yaml_path)
+
+        assert spec.name == "simple_protocol"
+        assert spec.protocol_version == "v1"
+        assert spec.max_depth == 1
+        assert len(spec.expand_rules) == 1
+        assert spec.expand_rules[0].id == "expand_options"
+
+    def test_run_with_yaml_protocol(self, tmp_path: Path) -> None:
+        """Test running engine with YAML protocol produces artifact."""
+        import json
+
+        from delibera.protocol import load_protocol_from_yaml
+
+        yaml_content = """
+name: yaml_test
+protocol_version: v1
+max_depth: 1
+
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+    source: planner_output
+
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+  - id: research
+    kind: work
+    step_name: RESEARCH
+    role: researcher
+  - id: validate
+    kind: validate
+    step_name: CLAIM_CHECK
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+        runs_dir = tmp_path / "runs"
+
+        spec = load_protocol_from_yaml(yaml_file)
+        engine = Engine(
+            runs_dir=runs_dir,
+            protocol=spec,
+            protocol_source=f"yaml:{yaml_file}",
+            gates_enabled=False,
+        )
+
+        run_dir = engine.run("Test question with YAML protocol")
+
+        # Verify outputs exist
+        assert (run_dir / "artifact.json").exists()
+        assert (run_dir / "trace.jsonl").exists()
+
+        # Check trace has protocol metadata
+        trace_path = run_dir / "trace.jsonl"
+        events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        run_start = [e for e in events if e["event_type"] == "run_start"][0]
+
+        assert run_start["payload"]["protocol_name"] == "yaml_test"
+        assert run_start["payload"]["protocol_version"] == "v1"
+        assert run_start["payload"]["protocol_source"] == f"yaml:{yaml_file}"
+
+    def test_protocol_from_dict_valid(self) -> None:
+        """Test protocol_from_dict with valid dictionary."""
+        from delibera.protocol import protocol_from_dict
+
+        data = {
+            "name": "dict_test",
+            "protocol_version": "v2",
+            "max_depth": 1,
+            "expand_rules": [
+                {
+                    "id": "exp1",
+                    "at_step_id": "plan",
+                    "child_kind": "option",
+                    "max_children": 3,
+                    "depth": 1,
+                    "source": "planner_output",
+                }
+            ],
+            "branch_pipeline": [
+                {"id": "propose", "kind": "work", "step_name": "PROPOSE", "role": "proposer"}
+            ],
+            "prune": {"rule": "epistemic_then_score", "keep_k": 2},
+            "reduce": {"rule": "merge_artifacts"},
+        }
+
+        spec = protocol_from_dict(data)
+
+        assert spec.name == "dict_test"
+        assert spec.protocol_version == "v2"
+        assert len(spec.expand_rules) == 1
+        assert spec.expand_rules[0].id == "exp1"
+
+    def test_duplicate_expand_rule_ids_error(self, tmp_path: Path) -> None:
+        """Test that duplicate expand rule IDs are caught in validation."""
+        from delibera.protocol import ProtocolLoadError, load_protocol_from_yaml
+
+        yaml_content = """
+name: test_protocol
+protocol_version: v1
+max_depth: 2
+
+expand_rules:
+  - id: same_id
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+    source: planner_output
+  - id: same_id
+    at_step_id: propose
+    child_kind: plan
+    max_children: 2
+    depth: 2
+    source: agent_output
+
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+"""
+        yaml_file = tmp_path / "protocol.yaml"
+        yaml_file.write_text(yaml_content)
+
+        with pytest.raises(ProtocolLoadError, match="Validation failed.*[Dd]uplicate"):
+            load_protocol_from_yaml(yaml_file)

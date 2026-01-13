@@ -450,6 +450,7 @@ class TestToolRouterIntegration:
         engine = Engine(
             runs_dir=tmp_path,
             policy_engine=policy,
+            gates_enabled=False,  # Disable gates to avoid blocking objection check
         )
 
         # Run should still succeed (proposer and researcher fall back)

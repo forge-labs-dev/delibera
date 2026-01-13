@@ -1,5 +1,6 @@
 """Stub agents for v0 testing without LLMs."""
 
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 from delibera.tools.spec import ToolDenied, ToolExecutionError
@@ -44,6 +45,9 @@ class ProposerStub:
     - Option C: 0.4 (lowest, will be pruned)
 
     Optionally uses calculator tool to compute confidence when tool callback provided.
+
+    Emits fact claims with keywords that match evidence excerpts for testing
+    claim↔evidence linkage.
     """
 
     # Deterministic base scores for testing
@@ -58,6 +62,13 @@ class ProposerStub:
         "A": 0.8,
         "B": 0.6,
         "C": 0.4,
+    }
+
+    # Fact claims that match ResearcherStub's search terms for evidence linkage
+    _FACT_CLAIMS: dict[str, str] = {
+        "A": "UV installation is extremely fast compared to pip.",
+        "B": "UV is compatible with existing pip workflows.",
+        "C": "UV generates reproducible lockfiles for builds.",
     }
 
     def execute(
@@ -100,11 +111,15 @@ class ProposerStub:
         else:
             score = self._FALLBACK_SCORES.get(option_letter, 0.5)
 
+        # Get fact claim that matches evidence keywords
+        fact_claim = self._FACT_CLAIMS.get(option_letter, "")
+
         output: dict[str, Any] = {
             "proposal": f"Proposal for {label}",
             "summary": f"This approach addresses '{question[:50]}...' by...",
             "pros": [f"Pro 1 for option {option_letter}", f"Pro 2 for option {option_letter}"],
             "cons": [f"Con 1 for option {option_letter}"],
+            "facts": [fact_claim] if fact_claim else [],
             "score": score,
             "role": "proposer",
         }
@@ -274,3 +289,124 @@ class ResearcherStub:
                 excerpt = excerpt[:space_pos] + "..."
 
         return excerpt.strip()
+
+
+class RedTeamStub:
+    """Stub red team agent that raises objections deterministically.
+
+    Examines node artifact and ledger to identify issues:
+    1. If any inference claims are weak after validation, create blocking objection
+    2. If no evidence exists, create blocking objection targeting artifact
+    3. Otherwise, create one nonblocking objection for tradeoff consideration
+
+    Generates up to 2 objections per node in deterministic order.
+    Objection IDs are sha1 hashes for determinism.
+    """
+
+    def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Generate objections based on artifact and claims.
+
+        Args:
+            context: Must contain:
+                - "node_id": Node ID for deterministic objection IDs
+                - "artifact": The node's artifact dict
+                - "claims": List of claim dicts with "status", "claim_type", "claim_id"
+                - "evidence_count": Number of evidence items in ledger
+
+        Returns:
+            Dict with "objections" list and "role" field.
+        """
+        node_id = context.get("node_id", "")
+        claims = context.get("claims", [])
+        evidence_count = context.get("evidence_count", 0)
+
+        objections: list[dict[str, Any]] = []
+
+        # Rule 1: Check for weak inference claims
+        weak_inference_claims = [
+            c for c in claims if c.get("claim_type") == "inference" and c.get("status") == "weak"
+        ]
+
+        if weak_inference_claims:
+            # Create blocking objection targeting first weak inference claim
+            first_weak = weak_inference_claims[0]
+            target = first_weak.get("claim_id", "artifact")
+            rationale = "Inference claim is weak; provide evidence or revise."
+            severity = "blocking"
+
+            obj_id = self._make_objection_id(node_id, target, severity, rationale)
+            objections.append(
+                {
+                    "objection_id": obj_id,
+                    "target": target,
+                    "severity": severity,
+                    "status": "open",
+                    "rationale": rationale,
+                }
+            )
+
+        # Rule 2: Check for missing evidence
+        if evidence_count == 0:
+            target = "artifact"
+            rationale = "No evidence attached; decision is not supported."
+            severity = "blocking"
+
+            obj_id = self._make_objection_id(node_id, target, severity, rationale)
+            # Avoid duplicate if this would be the same as rule 1 objection
+            if not any(o["objection_id"] == obj_id for o in objections):
+                objections.append(
+                    {
+                        "objection_id": obj_id,
+                        "target": target,
+                        "severity": severity,
+                        "status": "open",
+                        "rationale": rationale,
+                    }
+                )
+
+        # Rule 3: If no blocking objections yet, create nonblocking tradeoff objection
+        if not objections:
+            target = "artifact"
+            rationale = "Consider alternative tradeoffs."
+            severity = "nonblocking"
+
+            obj_id = self._make_objection_id(node_id, target, severity, rationale)
+            objections.append(
+                {
+                    "objection_id": obj_id,
+                    "target": target,
+                    "severity": severity,
+                    "status": "open",
+                    "rationale": rationale,
+                }
+            )
+
+        # Limit to 2 objections max (deterministic order)
+        objections = objections[:2]
+
+        return {
+            "objections": objections,
+            "role": "redteam",
+            "step": "REDTEAM",
+        }
+
+    def _make_objection_id(
+        self,
+        node_id: str,
+        target: str,
+        severity: str,
+        rationale: str,
+    ) -> str:
+        """Generate deterministic objection ID.
+
+        Args:
+            node_id: The node ID.
+            target: Target claim_id or "artifact".
+            severity: "blocking" or "nonblocking".
+            rationale: The objection rationale.
+
+        Returns:
+            10-character hex hash as objection ID.
+        """
+        content = f"{node_id}:{target}:{severity}:{rationale}"
+        return hashlib.sha1(content.encode()).hexdigest()[:10]

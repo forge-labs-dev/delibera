@@ -123,11 +123,12 @@ class Objection:
     addressed before convergence.
 
     Attributes:
-        objection_id: Unique identifier.
-        target: Reference to a claim_id or artifact field.
+        objection_id: Unique identifier (deterministic hash-based).
+        target: Reference to a claim_id or "artifact".
         severity: Whether this objection blocks convergence.
         status: Current status in the objection lifecycle.
         rationale: Explanation of the objection.
+        owner: Role that raised this objection.
     """
 
     objection_id: str
@@ -135,3 +136,15 @@ class Objection:
     severity: ObjectionSeverity
     status: ObjectionStatus
     rationale: str
+    owner: str
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert to dictionary for trace logging."""
+        return {
+            "objection_id": self.objection_id,
+            "target": self.target,
+            "severity": self.severity.value,
+            "status": self.status.value,
+            "rationale": self.rationale,
+            "owner": self.owner,
+        }

@@ -3,7 +3,8 @@
 Validates claims based on their type and available evidence.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from delibera.epistemics.models import (
     Claim,
@@ -11,6 +12,9 @@ from delibera.epistemics.models import (
     ClaimType,
     Evidence,
 )
+
+# Maximum evidence matches to record per claim
+MAX_EVIDENCE_MATCHES_PER_CLAIM = 2
 
 
 @dataclass
@@ -23,13 +27,60 @@ class ClaimCheckReport:
         supported: Count of supported claims.
         weak: Count of weak claims.
         unsupported: Count of unsupported claims.
-        details: List of per-claim status details.
+        details: List of per-claim status details with supporting_evidence_ids.
     """
 
     supported: int
     weak: int
     unsupported: int
-    details: list[dict[str, str]]
+    details: list[dict[str, Any]]
+    support_relations: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _find_supporting_evidence(
+    claim: Claim,
+    evidence: list[Evidence],
+    max_matches: int = MAX_EVIDENCE_MATCHES_PER_CLAIM,
+) -> list[str]:
+    """Find evidence IDs that support a claim via keyword matching.
+
+    Simple heuristic: evidence supports the claim if its excerpt contains
+    at least one keyword (word of 4+ chars) from the claim text.
+
+    Args:
+        claim: The claim to check.
+        evidence: Available evidence items.
+        max_matches: Maximum number of evidence IDs to return.
+
+    Returns:
+        List of evidence IDs that support the claim (up to max_matches).
+    """
+    if not evidence:
+        return []
+
+    # Extract keywords from claim text (words of 4+ chars)
+    claim_words = {word.lower().strip(".,;:!?") for word in claim.text.split() if len(word) >= 4}
+
+    if not claim_words:
+        return []
+
+    matching_ids: list[str] = []
+
+    # Sort evidence by (source, id) for deterministic order
+    sorted_evidence = sorted(evidence, key=lambda e: (e.source, e.evidence_id))
+
+    for ev in sorted_evidence:
+        excerpt_lower = ev.excerpt.lower()
+        # Check if any keyword appears in excerpt
+        for word in claim_words:
+            if word in excerpt_lower:
+                matching_ids.append(ev.evidence_id)
+                break  # Only add each evidence once
+
+        if len(matching_ids) >= max_matches:
+            break
+
+    return matching_ids
 
 
 def _claim_has_evidence_support(claim: Claim, evidence: list[Evidence]) -> bool:
@@ -45,21 +96,7 @@ def _claim_has_evidence_support(claim: Claim, evidence: list[Evidence]) -> bool:
     Returns:
         True if evidence supports the claim.
     """
-    if not evidence:
-        return False
-
-    # Extract keywords from claim text (words of 4+ chars)
-    claim_words = {word.lower().strip(".,;:!?") for word in claim.text.split() if len(word) >= 4}
-
-    # Check if any evidence excerpt contains claim keywords
-    for ev in evidence:
-        excerpt_lower = ev.excerpt.lower()
-        # Supported if at least one keyword appears in excerpt
-        for word in claim_words:
-            if word in excerpt_lower:
-                return True
-
-    return False
+    return len(_find_supporting_evidence(claim, evidence, max_matches=1)) > 0
 
 
 def validate_claims(
@@ -77,18 +114,20 @@ def validate_claims(
                           weak otherwise
 
     Updates claim.status in-place and returns a summary report.
+    Also computes support_relations linking claims to evidence.
 
     Args:
         claims: List of claims to validate.
         evidence: List of available evidence from ledger.
 
     Returns:
-        ClaimCheckReport summarizing validation results.
+        ClaimCheckReport summarizing validation results with support_relations.
     """
     supported = 0
     weak = 0
     unsupported = 0
-    details: list[dict[str, str]] = []
+    details: list[dict[str, Any]] = []
+    support_relations: dict[str, list[str]] = {}
 
     # First pass: validate fact, plan, and value claims
     fact_results: dict[str, ClaimStatus] = {}
@@ -103,9 +142,11 @@ def validate_claims(
             supported += 1
         elif claim.claim_type == ClaimType.FACT:
             # Fact claims: supported if evidence contains keywords
-            if _claim_has_evidence_support(claim, evidence):
+            supporting_ids = _find_supporting_evidence(claim, evidence)
+            if supporting_ids:
                 claim.status = ClaimStatus.SUPPORTED
                 supported += 1
+                support_relations[claim.claim_id] = supporting_ids
             else:
                 claim.status = ClaimStatus.UNSUPPORTED
                 unsupported += 1
@@ -124,6 +165,10 @@ def validate_claims(
             if len(evidence) > 0 and unsupported_facts == 0:
                 claim.status = ClaimStatus.SUPPORTED
                 supported += 1
+                # For inference claims, find supporting evidence too
+                supporting_ids = _find_supporting_evidence(claim, evidence)
+                if supporting_ids:
+                    support_relations[claim.claim_id] = supporting_ids
             else:
                 claim.status = ClaimStatus.WEAK
                 weak += 1
@@ -132,12 +177,13 @@ def validate_claims(
             claim.status = ClaimStatus.UNSUPPORTED
             unsupported += 1
 
-    # Build details list
+    # Build details list with supporting_evidence_ids
     for claim in claims:
-        detail: dict[str, str] = {
+        detail: dict[str, Any] = {
             "claim_id": claim.claim_id,
             "status": claim.status.value,
             "type": claim.claim_type.value,
+            "supporting_evidence_ids": support_relations.get(claim.claim_id, []),
         }
         details.append(detail)
 
@@ -146,4 +192,5 @@ def validate_claims(
         weak=weak,
         unsupported=unsupported,
         details=details,
+        support_relations=support_relations,
     )
