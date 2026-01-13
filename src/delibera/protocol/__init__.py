@@ -17,6 +17,11 @@ from delibera.protocol.interpreter import (
     ValidateAction,
     WorkAction,
 )
+from delibera.protocol.loader import (
+    ProtocolLoadError,
+    load_protocol_from_yaml,
+    protocol_from_dict,
+)
 from delibera.protocol.spec import (
     ConvergenceSpec,
     ExpandSpec,
@@ -40,6 +45,10 @@ __all__ = [
     "DEFAULT_PROTOCOL",
     "create_simple_protocol",
     "create_tree_protocol_v1",
+    # Loader
+    "load_protocol_from_yaml",
+    "protocol_from_dict",
+    "ProtocolLoadError",
     # Interpreter
     "ProtocolInterpreter",
     "ExpandAction",

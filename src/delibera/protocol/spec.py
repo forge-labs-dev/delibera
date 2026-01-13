@@ -34,6 +34,7 @@ class ExpandSpec:
     Defines where and how the tree should expand.
     """
 
+    id: str  # Unique identifier for this expand rule
     at_step_id: str  # Step after which expansion occurs
     child_kind: Literal["option", "plan", "risk"]
     max_children: int
@@ -43,6 +44,8 @@ class ExpandSpec:
 
     def __post_init__(self) -> None:
         """Validate expand specification."""
+        if not self.id:
+            raise ValueError("Expand rule id cannot be empty")
         if self.max_children <= 0:
             raise ValueError(f"max_children must be > 0, got {self.max_children}")
         if self.depth <= 0:
@@ -89,6 +92,7 @@ class ProtocolSpec:
     """
 
     name: str
+    protocol_version: str  # Version identifier (e.g., "v1")
     max_depth: int
     expand_rules: list[ExpandSpec]
     branch_pipeline: list[StepSpec]  # Steps run per node after expansion
@@ -100,16 +104,18 @@ class ProtocolSpec:
 
     def __post_init__(self) -> None:
         """Validate protocol specification."""
-        if self.max_depth <= 0:
-            raise ValueError(f"max_depth must be > 0, got {self.max_depth}")
         if not self.name:
             raise ValueError("Protocol name cannot be empty")
+        if not self.protocol_version:
+            raise ValueError("Protocol version cannot be empty")
+        if self.max_depth <= 0:
+            raise ValueError(f"max_depth must be > 0, got {self.max_depth}")
 
         # Validate expand rules don't exceed max_depth
         for expand in self.expand_rules:
             if expand.depth > self.max_depth:
                 raise ValueError(
-                    f"Expand rule at '{expand.at_step_id}' has depth {expand.depth} "
+                    f"Expand rule '{expand.id}' has depth {expand.depth} "
                     f"exceeding max_depth {self.max_depth}"
                 )
 
@@ -163,7 +169,8 @@ def validate_protocol(spec: ProtocolSpec) -> list[str]:
     for expand in spec.expand_rules:
         # at_step_id can be "plan" for root-level expansion
         if expand.at_step_id != "plan" and expand.at_step_id not in all_step_ids:
-            errors.append(f"Expand rule references unknown step '{expand.at_step_id}'")
+            step_ref = expand.at_step_id
+            errors.append(f"Expand rule '{expand.id}' references unknown step '{step_ref}'")
 
     # Check for duplicate step IDs
     step_ids = [s.id for s in spec.branch_pipeline] + [s.id for s in spec.refine_loop]
@@ -172,6 +179,14 @@ def validate_protocol(spec: ProtocolSpec) -> list[str]:
         if sid in seen:
             errors.append(f"Duplicate step ID: '{sid}'")
         seen.add(sid)
+
+    # Check for duplicate expand rule IDs
+    expand_ids = [e.id for e in spec.expand_rules]
+    seen_expand: set[str] = set()
+    for eid in expand_ids:
+        if eid in seen_expand:
+            errors.append(f"Duplicate expand rule ID: '{eid}'")
+        seen_expand.add(eid)
 
     # Check that branch_pipeline is not empty
     if not spec.branch_pipeline:

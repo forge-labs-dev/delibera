@@ -7,8 +7,45 @@ import click
 
 from delibera.engine.orchestrator import Engine
 from delibera.gates import AutoApproveGateHandler, CLIGateHandler, GateAborted, GateHandler
+from delibera.gates.predicates import DEFAULT_TIE_THRESHOLD
+from delibera.protocol import ProtocolLoadError, ProtocolSpec, load_protocol_from_yaml
+from delibera.scoring import ScoreWeights
 from delibera.trace.reader import load_artifact
 from delibera.trace.replay import replay_from_directory, verify_replay
+
+
+def _parse_weights(weights_str: str) -> ScoreWeights:
+    """Parse weights string into ScoreWeights.
+
+    Args:
+        weights_str: Comma-separated key=value pairs.
+
+    Returns:
+        ScoreWeights with parsed values merged with defaults.
+
+    Raises:
+        click.BadParameter: If parsing fails.
+    """
+    weights_dict: dict[str, float] = {}
+    for pair in weights_str.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise click.BadParameter(
+                f"Invalid weight format: '{pair}'. Expected 'key=value'.",
+                param_hint="--weights",
+            )
+        key, value = pair.split("=", 1)
+        try:
+            weights_dict[key.strip()] = float(value.strip())
+        except ValueError as err:
+            raise click.BadParameter(
+                f"Invalid weight value: '{value}'. Must be a number.",
+                param_hint="--weights",
+            ) from err
+
+    return ScoreWeights.from_dict(weights_dict)
 
 
 @click.group()
@@ -34,13 +71,43 @@ def main() -> None:
     default=False,
     help="Automatically approve all gates without prompting. For CI/tests.",
 )
-def run(question: str, gates: bool, auto_approve_gates: bool) -> None:
+@click.option(
+    "--tie-threshold",
+    type=float,
+    default=DEFAULT_TIE_THRESHOLD,
+    help=f"Score difference threshold for tradeoff gate. Default: {DEFAULT_TIE_THRESHOLD}",
+)
+@click.option(
+    "--weights",
+    type=str,
+    default=None,
+    help="Scoring weights as key=value pairs (e.g., 'evidence_coverage=2.0,weak_claims=-0.5'). "
+    "If provided, skips tradeoff gate.",
+)
+@click.option(
+    "--protocol",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to YAML protocol file. If not provided, uses builtin default.",
+)
+def run(
+    question: str,
+    gates: bool,
+    auto_approve_gates: bool,
+    tie_threshold: float,
+    weights: str | None,
+    protocol: str | None,
+) -> None:
     """Run a deliberation on the given question.
 
     Creates a new run directory with trace.jsonl and artifact.json.
 
     Gates are enabled by default. Use --no-gates to disable them entirely,
     or --auto-approve-gates to automatically approve without prompting.
+
+    Use --tie-threshold to adjust when the tradeoff gate fires (lower = more sensitive).
+    Use --weights to set scoring weights directly, which skips the tradeoff gate.
+    Use --protocol to specify a YAML protocol file.
     """
     # Determine gate handler
     gate_handler: GateHandler
@@ -57,9 +124,33 @@ def run(question: str, gates: bool, auto_approve_gates: bool) -> None:
         gate_handler = CLIGateHandler()
         gates_enabled = True
 
+    # Parse weights if provided
+    initial_weights: ScoreWeights | None = None
+    if weights:
+        initial_weights = _parse_weights(weights)
+
+    # Load protocol if provided
+    protocol_spec: ProtocolSpec | None = None
+    protocol_source: str | None = None
+    if protocol:
+        protocol_path = Path(protocol)
+        try:
+            protocol_spec = load_protocol_from_yaml(protocol_path)
+            protocol_source = f"yaml:{protocol_path}"
+        except ProtocolLoadError as e:
+            click.echo(f"Error loading protocol: {e}", err=True)
+            sys.exit(1)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
     engine = Engine(
         gate_handler=gate_handler,
         gates_enabled=gates_enabled,
+        tie_threshold=tie_threshold,
+        initial_weights=initial_weights,
+        protocol=protocol_spec,
+        protocol_source=protocol_source,
     )
 
     try:

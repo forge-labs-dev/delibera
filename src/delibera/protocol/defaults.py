@@ -28,10 +28,12 @@ def create_tree_protocol_v1() -> ProtocolSpec:
     """
     return ProtocolSpec(
         name="tree_protocol_v1",
+        protocol_version="v1",
         max_depth=2,
         expand_rules=[
             # Level 1: After PLAN, expand root into options
             ExpandSpec(
+                id="expand_options",
                 at_step_id="plan",
                 child_kind="option",
                 max_children=3,
@@ -40,6 +42,7 @@ def create_tree_protocol_v1() -> ProtocolSpec:
             ),
             # Level 2: After PROPOSE, expand each option into subplans
             ExpandSpec(
+                id="expand_subplans",
                 at_step_id="propose",
                 child_kind="plan",
                 max_children=2,
@@ -67,6 +70,12 @@ def create_tree_protocol_v1() -> ProtocolSpec:
                 step_name="CLAIM_CHECK",
                 role=None,
             ),
+            StepSpec(
+                id="redteam",
+                kind="work",
+                step_name="REDTEAM",
+                role="redteam",
+            ),
         ],
         prune=PruneSpec(
             rule="epistemic_then_score",
@@ -93,10 +102,12 @@ def create_simple_protocol() -> ProtocolSpec:
     """
     return ProtocolSpec(
         name="simple_protocol",
+        protocol_version="v1",
         max_depth=1,
         expand_rules=[
             # Single expansion after PLAN
             ExpandSpec(
+                id="expand_options",
                 at_step_id="plan",
                 child_kind="option",
                 max_children=3,
@@ -122,6 +133,12 @@ def create_simple_protocol() -> ProtocolSpec:
                 kind="validate",
                 step_name="CLAIM_CHECK",
                 role=None,
+            ),
+            StepSpec(
+                id="redteam",
+                kind="work",
+                step_name="REDTEAM",
+                role="redteam",
             ),
         ],
         prune=PruneSpec(

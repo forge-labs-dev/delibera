@@ -1,0 +1,55 @@
+# Delibera Tree Protocol v1
+#
+# This is the default deliberation protocol implementing a single-level
+# expansion (v0-compatible) with PROPOSE -> RESEARCH -> CLAIM_CHECK -> REDTEAM pipeline.
+
+name: simple_protocol
+protocol_version: v1
+max_depth: 1
+gates_enabled: true
+
+# Expansion rules define where and how the tree grows
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+    source: planner_output
+
+# Branch pipeline: steps executed for each node after expansion
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+  - id: research
+    kind: work
+    step_name: RESEARCH
+    role: researcher
+
+  - id: validate
+    kind: validate
+    step_name: CLAIM_CHECK
+
+  - id: redteam
+    kind: work
+    step_name: REDTEAM
+    role: redteam
+
+# Refinement loop (empty for v1 - no iterative refinement)
+refine_loop: []
+
+# Pruning configuration
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+# Reduction configuration
+reduce:
+  rule: merge_artifacts
+
+# Convergence settings
+convergence:
+  max_rounds: 0

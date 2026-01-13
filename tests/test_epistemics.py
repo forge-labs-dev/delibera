@@ -309,11 +309,13 @@ class TestModels:
             severity=ObjectionSeverity.BLOCKING,
             status=ObjectionStatus.OPEN,
             rationale="This claim is not justified",
+            owner="redteam",
         )
 
         assert objection.objection_id == "o1"
         assert objection.severity == ObjectionSeverity.BLOCKING
         assert objection.status == ObjectionStatus.OPEN
+        assert objection.owner == "redteam"
 
     def test_evidence_model(self) -> None:
         """Test Evidence model creation."""
@@ -326,3 +328,119 @@ class TestModels:
 
         assert evidence.evidence_id == "e1"
         assert evidence.source == "https://example.com"
+
+    def test_objection_to_dict(self) -> None:
+        """Test Objection.to_dict() serialization."""
+        objection = Objection(
+            objection_id="o1",
+            target="c1",
+            severity=ObjectionSeverity.BLOCKING,
+            status=ObjectionStatus.OPEN,
+            rationale="This claim is not justified",
+            owner="redteam",
+        )
+        d = objection.to_dict()
+
+        assert d["objection_id"] == "o1"
+        assert d["target"] == "c1"
+        assert d["severity"] == "blocking"
+        assert d["status"] == "open"
+        assert d["rationale"] == "This claim is not justified"
+        assert d["owner"] == "redteam"
+
+    def test_objection_severity_enum_values(self) -> None:
+        """Test ObjectionSeverity enum values."""
+        assert ObjectionSeverity.BLOCKING.value == "blocking"
+        assert ObjectionSeverity.NONBLOCKING.value == "nonblocking"
+
+    def test_objection_status_enum_values(self) -> None:
+        """Test ObjectionStatus enum values."""
+        assert ObjectionStatus.OPEN.value == "open"
+        assert ObjectionStatus.RESOLVED.value == "resolved"
+        assert ObjectionStatus.ACCEPTED.value == "accepted"
+
+
+class TestLedgerObjections:
+    """Tests for ledger objection operations."""
+
+    def test_add_objection_to_ledger(self) -> None:
+        """Test adding objection to ledger."""
+        ledger = Ledger()
+        objection = Objection(
+            objection_id="o1",
+            target="c1",
+            severity=ObjectionSeverity.BLOCKING,
+            status=ObjectionStatus.OPEN,
+            rationale="Test rationale",
+            owner="redteam",
+        )
+
+        ledger.add_objection(objection)
+
+        assert len(ledger.objections) == 1
+        assert ledger.objections[0].objection_id == "o1"
+
+    def test_add_duplicate_objection_is_idempotent(self) -> None:
+        """Test that adding duplicate objection doesn't create copies."""
+        ledger = Ledger()
+        objection = Objection(
+            objection_id="o1",
+            target="c1",
+            severity=ObjectionSeverity.BLOCKING,
+            status=ObjectionStatus.OPEN,
+            rationale="Test rationale",
+            owner="redteam",
+        )
+
+        ledger.add_objection(objection)
+        ledger.add_objection(objection)
+
+        assert len(ledger.objections) == 1
+
+    def test_merge_objections_deduplicates(self) -> None:
+        """Test that merging objections deduplicates by ID."""
+        from delibera.epistemics.ledger import merge_objections
+
+        obj1 = Objection("o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.OPEN, "r1", "t1")
+        obj2 = Objection("o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.OPEN, "r1", "t1")
+
+        merged = merge_objections([[obj1], [obj2]])
+
+        assert len(merged) == 1
+        assert merged[0].objection_id == "o1"
+
+    def test_merge_objections_status_priority(self) -> None:
+        """Test that merge prefers resolved > accepted > open."""
+        from delibera.epistemics.ledger import merge_objections
+
+        obj_open = Objection("o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.OPEN, "r", "t")
+        obj_accepted = Objection(
+            "o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.ACCEPTED, "r", "t"
+        )
+        obj_resolved = Objection(
+            "o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.RESOLVED, "r", "t"
+        )
+
+        # Resolved wins over accepted and open
+        merged = merge_objections([[obj_open], [obj_resolved], [obj_accepted]])
+        assert merged[0].status == ObjectionStatus.RESOLVED
+
+        # Accepted wins over open
+        merged2 = merge_objections([[obj_open], [obj_accepted]])
+        assert merged2[0].status == ObjectionStatus.ACCEPTED
+
+    def test_merge_ledgers_merges_objections(self) -> None:
+        """Test that merge_ledgers properly merges objections."""
+        obj1 = Objection("o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.OPEN, "r1", "t1")
+        obj2 = Objection(
+            "o2", "c2", ObjectionSeverity.NONBLOCKING, ObjectionStatus.OPEN, "r2", "t2"
+        )
+
+        ledger1 = Ledger(objections=[obj1])
+        ledger2 = Ledger(objections=[obj2])
+
+        merged = merge_ledgers([ledger1, ledger2])
+
+        assert len(merged.objections) == 2
+        ids = {o.objection_id for o in merged.objections}
+        assert ids == {"o1", "o2"}

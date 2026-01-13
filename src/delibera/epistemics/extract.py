@@ -33,6 +33,7 @@ def extract_claims(
 
     Extraction rules (v1):
     - artifact["proposal"] -> plan claim (confidence 0.8)
+    - artifact["facts"] items -> fact claims (confidence 0.9)
     - artifact["pros"] items -> inference claims (confidence 0.6)
     - artifact["rationale"] items -> inference claims (confidence 0.6)
     - Empty strings are skipped
@@ -59,6 +60,21 @@ def extract_claims(
                 owner=owner,
             )
         )
+
+    # Extract fact claims from facts
+    facts = artifact.get("facts", [])
+    if isinstance(facts, list):
+        for fact in facts:
+            if fact and isinstance(fact, str) and fact.strip():
+                claims.append(
+                    Claim(
+                        claim_id=_generate_claim_id(node_id, fact),
+                        text=fact.strip(),
+                        claim_type=ClaimType.FACT,
+                        confidence=0.9,
+                        owner=owner,
+                    )
+                )
 
     # Extract inference claims from pros
     pros = artifact.get("pros", [])

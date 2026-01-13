@@ -6,6 +6,7 @@ Provides structured user interaction through gates.
 from delibera.gates.apply import (
     apply_final_signoff_response,
     apply_scope_response,
+    apply_tradeoff_response,
     get_response_changes,
 )
 from delibera.gates.handler import (
@@ -22,9 +23,14 @@ from delibera.gates.models import (
     GateResponse,
     GateSummary,
     GateType,
+    TradeoffCandidate,
     validate_response,
 )
-from delibera.gates.predicates import needs_final_signoff_gate, needs_scope_gate
+from delibera.gates.predicates import (
+    needs_final_signoff_gate,
+    needs_scope_gate,
+    needs_tradeoff_gate,
+)
 
 __all__ = [
     # Models
@@ -34,6 +40,7 @@ __all__ = [
     "GateResponse",
     "GateError",
     "GateAborted",
+    "TradeoffCandidate",
     "GATE_ALLOWED_ACTIONS",
     "validate_response",
     # Handlers
@@ -43,9 +50,11 @@ __all__ = [
     "ScriptedGateHandler",
     # Predicates
     "needs_scope_gate",
+    "needs_tradeoff_gate",
     "needs_final_signoff_gate",
     # Apply
     "apply_scope_response",
+    "apply_tradeoff_response",
     "apply_final_signoff_response",
     "get_response_changes",
 ]

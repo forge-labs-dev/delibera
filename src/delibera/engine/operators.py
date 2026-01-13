@@ -10,7 +10,7 @@ from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree, Node
 from delibera.epistemics.extract import extract_claims
 from delibera.epistemics.ledger import merge_ledgers
-from delibera.epistemics.models import ClaimStatus
+from delibera.epistemics.models import ClaimStatus, ClaimType, ObjectionSeverity, ObjectionStatus
 from delibera.epistemics.validate import ClaimCheckReport, validate_claims
 
 
@@ -39,7 +39,8 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
     1. Extracts claims from the node's artifact
     2. Validates claims using ledger evidence
     3. Stores claims in the node's ledger
-    4. Returns a validation report
+    4. Links claims to supporting evidence via support_relations
+    5. Returns a validation report
 
     Args:
         tree: The deliberation tree.
@@ -47,7 +48,7 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
         owner: The role that produced the artifact.
 
     Returns:
-        ClaimCheckReport with validation results.
+        ClaimCheckReport with validation results and support_relations.
     """
     node = tree.get_node(node_id)
 
@@ -60,6 +61,11 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
     # Store claims in ledger
     node.ledger.claims = claims
 
+    # Record support relations in ledger
+    for claim_id, evidence_ids in report.support_relations.items():
+        for evidence_id in evidence_ids:
+            node.ledger.link_support(claim_id, evidence_id)
+
     return report
 
 
@@ -67,40 +73,56 @@ def prune(
     tree: DeliberationTree,
     node_ids: list[str],
     keep_count: int = 2,
+    weights: Any | None = None,  # ScoreWeights, import avoided for simplicity
 ) -> tuple[list[str], list[str]]:
-    """Prune weak branches using epistemic quality metrics.
+    """Prune weak branches using epistemic quality + weighted score.
 
     Pruning priority (deterministic):
-    1. Fewer unsupported claims (ascending)
-    2. Fewer weak claims (ascending)
-    3. Higher artifact score (descending)
+    1. Fewer open blocking objections (ascending)
+    2. Fewer unsupported claims (ascending)
+    3. Fewer weak claims (ascending)
+    4. Higher weighted score (descending)
+    5. Lexicographic tie-break by label (ascending)
 
     Args:
         tree: The deliberation tree.
         node_ids: IDs of nodes to consider for pruning.
         keep_count: Number of top nodes to keep.
+        weights: Optional ScoreWeights for score computation (uses artifact score).
 
     Returns:
         Tuple of (survivor_ids, pruned_ids).
     """
+    # Note: weights parameter is accepted for interface compatibility.
+    # The actual score is pre-computed and stored in node.artifact["score"]
+    # by the orchestrator's SCORE step.
+    _ = weights  # Unused here, score already in artifact
 
-    def compute_epistemic_key(node_id: str) -> tuple[int, int, float]:
+    def compute_epistemic_key(node_id: str) -> tuple[int, int, int, float, str]:
         """Compute sorting key for epistemic-based pruning.
 
-        Returns (unsupported_count, weak_count, -score) for sorting.
-        Lower is better for counts, higher is better for score.
+        Returns tuple for sorting where lower is better for counts,
+        higher is better for score.
+        Lexicographic label provides stable, deterministic tie-break.
         """
         node = tree.get_node(node_id)
+
+        # Count open blocking objections (highest priority for pruning)
+        blocking_count = sum(
+            1
+            for obj in node.ledger.objections
+            if obj.severity == ObjectionSeverity.BLOCKING and obj.status == ObjectionStatus.OPEN
+        )
 
         # Count claims by status
         unsupported = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED)
         weak = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK)
         score = node.artifact.get("score", 0.0)
 
-        # Return tuple for sorting: (unsupported, weak, -score)
-        # Ascending sort means fewer unsupported/weak is better,
-        # and higher score (negative becomes more negative) is better
-        return (unsupported, weak, -score)
+        # Return tuple: (blocking, unsupported, weak, -score, label)
+        # Ascending sort means fewer blocking/unsupported/weak is better,
+        # higher score (negative becomes more negative) is better
+        return (blocking_count, unsupported, weak, -score, node.label)
 
     # Sort nodes by epistemic quality
     sorted_node_ids = sorted(node_ids, key=compute_epistemic_key)
@@ -175,7 +197,8 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
         merged_node: The final merged node.
 
     Returns:
-        The final artifact dictionary with claim_check_summary and open_questions.
+        The final artifact dictionary with claim_check_summary, open_questions,
+        decision_explanation, and key_claims with citations.
     """
     # Get all option nodes to list what was considered (exclude merged node)
     root = state.tree.get_root()
@@ -202,6 +225,12 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
     if weak > 0 or unsupported > 0:
         open_questions.append("Add evidence to support inference claims.")
 
+    # Build decision explanation showing why survivors won
+    decision_explanation = _build_decision_explanation(option_nodes, survivors, pruned)
+
+    # Build key_claims with citations (up to 5 claims)
+    key_claims = _build_key_claims(merged_node)
+
     artifact: dict[str, Any] = {
         "question": state.question,
         "recommendation": merged_node.artifact.get("proposal", ""),
@@ -214,6 +243,171 @@ def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
         "confidence": merged_node.artifact.get("score", 0.0),
         "claim_check_summary": claim_check_summary,
         "open_questions": open_questions,
+        "decision_explanation": decision_explanation,
+        "key_claims": key_claims,
     }
 
     return artifact
+
+
+def _build_decision_explanation(
+    option_nodes: list[Node],
+    survivors: list[str],
+    pruned: list[str],
+) -> dict[str, Any]:
+    """Build explanation of why certain options were selected.
+
+    Args:
+        option_nodes: All option nodes that were considered.
+        survivors: Labels of nodes that survived pruning.
+        pruned: Labels of nodes that were pruned.
+
+    Returns:
+        Dictionary with scoring details for each option.
+    """
+    # Collect scoring info for each option
+    option_scores: list[dict[str, Any]] = []
+    for node in option_nodes:
+        # Count open blocking objections
+        blocking_count = sum(
+            1
+            for obj in node.ledger.objections
+            if obj.severity == ObjectionSeverity.BLOCKING and obj.status == ObjectionStatus.OPEN
+        )
+
+        # Count epistemic quality
+        unsupported_count = sum(
+            1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
+        )
+        weak_count = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK)
+        score = node.artifact.get("score", 0.0)
+        metrics = node.artifact.get("metrics", {})
+
+        option_scores.append(
+            {
+                "label": node.label,
+                "score": score,
+                "metrics": metrics,
+                "epistemic": {
+                    "blocking_objections": blocking_count,
+                    "unsupported_claims": unsupported_count,
+                    "weak_claims": weak_count,
+                },
+                "status": "survivor" if node.label in survivors else "pruned",
+            }
+        )
+
+    # Sort by the same criteria as prune: blocking, unsupported, weak, -score
+    option_scores.sort(
+        key=lambda x: (
+            x["epistemic"]["blocking_objections"],
+            x["epistemic"]["unsupported_claims"],
+            x["epistemic"]["weak_claims"],
+            -x["score"],
+        )
+    )
+
+    # Build explanation text
+    if survivors and pruned:
+        explanation_text = (
+            f"Options {', '.join(survivors)} were selected based on epistemic quality "
+            f"(fewer blocking objections, unsupported/weak claims) and weighted score. "
+            f"Options {', '.join(pruned)} were pruned."
+        )
+    elif survivors:
+        explanation_text = f"All options ({', '.join(survivors)}) were retained."
+    else:
+        explanation_text = "No options were evaluated."
+
+    return {
+        "summary": explanation_text,
+        "ranking": option_scores,
+        "selection_criteria": [
+            "1. Fewer open blocking objections",
+            "2. Fewer unsupported claims",
+            "3. Fewer weak claims",
+            "4. Higher weighted score",
+            "5. Lexicographic tie-break",
+        ],
+    }
+
+
+# Maximum excerpt length for citations
+MAX_CITATION_EXCERPT_LENGTH = 240
+# Maximum number of key claims in artifact
+MAX_KEY_CLAIMS = 5
+
+
+def _build_key_claims(merged_node: Node) -> list[dict[str, Any]]:
+    """Build key_claims section with citations for artifact.
+
+    Selects up to MAX_KEY_CLAIMS claims that have supporting evidence,
+    prioritized by type (fact > inference > plan) and then by claim_id
+    for deterministic ordering.
+
+    Args:
+        merged_node: The merged node with ledger containing claims and evidence.
+
+    Returns:
+        List of claim dicts with citations.
+    """
+    # Build evidence lookup
+    evidence_map = {e.evidence_id: e for e in merged_node.ledger.evidence}
+
+    # Priority: fact=0, inference=1, plan=2, value=3 (lower is better)
+    type_priority = {
+        ClaimType.FACT: 0,
+        ClaimType.INFERENCE: 1,
+        ClaimType.PLAN: 2,
+        ClaimType.VALUE: 3,
+    }
+
+    # Filter to claims with support and sort by priority
+    claims_with_support: list[tuple[int, str, Any]] = []
+    for claim in merged_node.ledger.claims:
+        if claim.status != ClaimStatus.SUPPORTED:
+            continue
+        # Get support relations
+        evidence_ids = merged_node.ledger.support_relations.get(claim.claim_id, [])
+        if not evidence_ids:
+            continue
+        priority = type_priority.get(claim.claim_type, 99)
+        claims_with_support.append((priority, claim.claim_id, claim))
+
+    # Sort by (priority, claim_id) for deterministic ordering
+    claims_with_support.sort(key=lambda x: (x[0], x[1]))
+
+    # Build key_claims list
+    key_claims: list[dict[str, Any]] = []
+    for _, _, claim in claims_with_support[:MAX_KEY_CLAIMS]:
+        evidence_ids = merged_node.ledger.support_relations.get(claim.claim_id, [])
+
+        # Build citations for this claim
+        citations: list[dict[str, str]] = []
+        for eid in evidence_ids:
+            evidence = evidence_map.get(eid)
+            if evidence is None:
+                continue
+            # Truncate excerpt if needed
+            excerpt = evidence.excerpt
+            if len(excerpt) > MAX_CITATION_EXCERPT_LENGTH:
+                excerpt = excerpt[: MAX_CITATION_EXCERPT_LENGTH - 3] + "..."
+            citations.append(
+                {
+                    "evidence_id": eid,
+                    "source": evidence.source,
+                    "excerpt": excerpt,
+                }
+            )
+
+        key_claims.append(
+            {
+                "claim_id": claim.claim_id,
+                "type": claim.claim_type.value,
+                "text": claim.text,
+                "status": claim.status.value,
+                "citations": citations,
+            }
+        )
+
+    return key_claims

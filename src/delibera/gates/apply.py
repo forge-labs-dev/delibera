@@ -11,6 +11,7 @@ from delibera.gates.models import (
     GateResponse,
     GateType,
 )
+from delibera.scoring.weights import ScoreWeights
 
 
 def apply_scope_response(
@@ -50,27 +51,76 @@ def apply_scope_response(
     return branch_labels
 
 
-def apply_final_signoff_response(response: GateResponse) -> bool:
-    """Apply final sign-off gate response.
+def apply_tradeoff_response(
+    response: GateResponse,
+    current_weights: ScoreWeights,
+) -> ScoreWeights:
+    """Apply tradeoff gate response to update scoring weights.
 
     Args:
         response: The validated gate response.
+        current_weights: The current scoring weights.
 
     Returns:
-        True if approved, False otherwise.
+        Updated ScoreWeights (may be same as current if approve_default).
 
     Raises:
         GateAborted: If user chose to abort.
     """
     if response.action == AllowedAction.ABORT:
+        raise GateAborted(GateType.TRADEOFF, "Run aborted at tradeoff gate")
+
+    if response.action == AllowedAction.APPROVE_DEFAULT:
+        return current_weights
+
+    if response.action == AllowedAction.SET_WEIGHTS:
+        # Merge user-provided weights with current weights
+        weight_overrides = response.parameters.get("weights", {})
+        weights_dict = current_weights.to_dict()
+        weights_dict.update(weight_overrides)
+        return ScoreWeights.from_dict(weights_dict)
+
+    # Unknown action - return unchanged
+    return current_weights
+
+
+def apply_final_signoff_response(
+    response: GateResponse,
+    has_blocking_objections: bool = False,
+) -> tuple[bool, list[str]]:
+    """Apply final sign-off gate response.
+
+    Args:
+        response: The validated gate response.
+        has_blocking_objections: Whether there are open blocking objections.
+
+    Returns:
+        Tuple of (approved, accepted_objection_ids).
+        - approved: True if run should proceed to finalize.
+        - accepted_objection_ids: List of objection IDs that were accepted.
+
+    Raises:
+        GateAborted: If user chose to abort or tried to approve with blockers.
+    """
+    if response.action == AllowedAction.ABORT:
         raise GateAborted(GateType.FINAL_SIGNOFF, "Run aborted at final sign-off gate")
 
     if response.action == AllowedAction.APPROVE:
-        return True
+        if has_blocking_objections:
+            raise GateAborted(
+                GateType.FINAL_SIGNOFF,
+                "Cannot approve with open blocking objections. Use 'accept_objections' first.",
+            )
+        return True, []
+
+    if response.action == AllowedAction.ACCEPT_OBJECTIONS:
+        objection_ids = response.parameters.get("objection_ids", [])
+        # Return the accepted IDs - caller will mark them as accepted
+        return False, objection_ids
 
     # REQUEST_MORE_ANALYSIS not implemented in v1
     # Treat as approval for now (should be caught by validation)
-    return True
+    return True, []
 
 
 def get_response_changes(
@@ -100,5 +150,9 @@ def get_response_changes(
             original = context["original_branches"]
             remaining = [b for b in original if b not in set(vetoed)]
             changes["remaining_branches"] = remaining
+
+    if response.action == AllowedAction.ACCEPT_OBJECTIONS:
+        accepted_ids = response.parameters.get("objection_ids", [])
+        changes["accepted_objection_ids"] = accepted_ids
 
     return changes

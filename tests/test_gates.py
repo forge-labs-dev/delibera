@@ -17,6 +17,7 @@ from delibera.gates import (
     apply_scope_response,
     validate_response,
 )
+from delibera.gates.handler import GateHandler
 
 
 class TestGateModels:
@@ -239,13 +240,15 @@ class TestEngineWithGates:
         gate_triggered = [e for e in events if e["event_type"] == "gate_triggered"]
         gate_response = [e for e in events if e["event_type"] == "gate_response_applied"]
 
-        # Should have 2 gates: scope and final_signoff
-        assert len(gate_triggered) == 2
-        assert len(gate_response) == 2
+        # Should have 3 gates: scope, tradeoff, and final_signoff
+        # (tradeoff fires because stub agents produce identical scores)
+        assert len(gate_triggered) == 3
+        assert len(gate_response) == 3
 
         # Verify gate types
         gate_types = [e["payload"]["gate_type"] for e in gate_triggered]
         assert "scope" in gate_types
+        assert "tradeoff" in gate_types
         assert "final_signoff" in gate_types
 
     def test_gates_disabled_no_gate_events(self, tmp_path: Path):
@@ -306,7 +309,7 @@ class TestEngineWithGates:
 
         # Check gate response was logged
         gate_response = [e for e in events if e["event_type"] == "gate_response_applied"]
-        assert len(gate_response) == 2  # scope + final_signoff
+        assert len(gate_response) == 3  # scope + tradeoff + final_signoff
 
         scope_response = [e for e in gate_response if e["payload"]["gate_type"] == "scope"][0]
         assert scope_response["payload"]["response"]["action"] == "veto_branches"
@@ -404,10 +407,11 @@ class TestEngineWithGates:
         )
         engine.run("Test question")
 
-        # Verify handler saw both gates
-        assert len(handler.triggered_gates) == 2
+        # Verify handler saw all three gates (scope, tradeoff, final_signoff)
+        assert len(handler.triggered_gates) == 3
         gate_types = [g.gate_type for g in handler.triggered_gates]
         assert GateType.SCOPE in gate_types
+        assert GateType.TRADEOFF in gate_types
         assert GateType.FINAL_SIGNOFF in gate_types
 
 
@@ -457,5 +461,249 @@ class TestGateSummaryContent:
         assert final_summary.claim_check_summary is not None
         assert final_summary.allowed_actions == [
             AllowedAction.APPROVE,
+            AllowedAction.ACCEPT_OBJECTIONS,
             AllowedAction.ABORT,
         ]
+
+
+class TestObjectionsAndConvergence:
+    """Tests for objection handling and convergence rule."""
+
+    def test_redteam_adds_objections_to_trace(self, tmp_path: Path):
+        """Test that RedTeam step produces objection_added events in trace."""
+        engine = Engine(
+            runs_dir=tmp_path,
+            gate_handler=AutoApproveGateHandler(),
+            gates_enabled=False,  # Disable gates to avoid blocking objection check
+        )
+
+        run_dir = engine.run("Should we use Python?")
+
+        # Check trace for objection events
+        trace_path = run_dir / "trace.jsonl"
+        events = []
+        with trace_path.open() as f:
+            for line in f:
+                events.append(json.loads(line))
+
+        objection_events = [e for e in events if e["event_type"] == "objection_added"]
+
+        # RedTeamStub should have added objections (at least one per node)
+        assert len(objection_events) >= 3  # 3 branches
+
+        # Each objection event should have required fields (nested in payload.objection)
+        for event in objection_events:
+            assert "node_id" in event["payload"]
+            assert "objection" in event["payload"]
+            objection = event["payload"]["objection"]
+            assert "objection_id" in objection
+            assert "target" in objection
+            assert "severity" in objection
+            assert "rationale" in objection
+            assert "owner" in objection
+
+    def test_auto_approve_completes_without_blocking_objections(self, tmp_path: Path):
+        """Test that auto-approve completes when no blocking objections exist.
+
+        With the default stubs (which have evidence), inference claims are
+        marked as supported, so RedTeamStub creates only nonblocking objections.
+        Auto-approve should complete successfully.
+        """
+        engine = Engine(
+            runs_dir=tmp_path,
+            gate_handler=AutoApproveGateHandler(),
+            gates_enabled=True,
+        )
+
+        # Stubs with evidence produce no blocking objections
+        run_dir = engine.run("Should we use Python?")
+
+        # Verify run completed
+        artifact_path = run_dir / "artifact.json"
+        assert artifact_path.exists()
+
+        # Read artifact and verify no blocking objections
+        with artifact_path.open() as f:
+            artifact = json.load(f)
+
+        assert len(artifact["objections"]["blocking_open"]) == 0
+
+    def test_accept_objections_flow(self, tmp_path: Path):
+        """Test the accept_objections action properly marks objections as accepted.
+
+        Since stubs with evidence don't produce blocking objections, this test
+        verifies the accept_objections logic using the apply_final_signoff_response
+        function directly.
+        """
+        from delibera.gates.apply import apply_final_signoff_response
+
+        # Test accept_objections returns proper IDs
+        response = GateResponse(
+            action=AllowedAction.ACCEPT_OBJECTIONS,
+            parameters={"objection_ids": ["o1", "o2"]},
+        )
+
+        approved, accepted_ids = apply_final_signoff_response(
+            response, has_blocking_objections=True
+        )
+
+        # Should not be approved yet (need to approve after accepting)
+        assert approved is False
+        # Should return the accepted IDs
+        assert accepted_ids == ["o1", "o2"]
+
+    def test_final_signoff_with_handler_that_accepts_then_approves(self, tmp_path: Path):
+        """Test handler that accepts objections then approves.
+
+        Since stubs don't produce blocking objections, this handler will
+        just approve directly (no blockers to accept). We verify the handler
+        is called and run completes.
+        """
+
+        class AcceptThenApproveHandler(GateHandler):
+            def __init__(self):
+                self._final_signoff_count = 0
+                self.triggered_summaries: list[GateSummary] = []
+
+            def handle(self, summary: GateSummary) -> GateResponse:
+                self.triggered_summaries.append(summary)
+
+                if summary.gate_type == GateType.FINAL_SIGNOFF:
+                    self._final_signoff_count += 1
+
+                    # First time: accept all blocking objections (if any)
+                    if self._final_signoff_count == 1 and summary.open_blocking_objections:
+                        objection_ids = [
+                            obj["objection_id"] for obj in summary.open_blocking_objections
+                        ]
+                        return GateResponse(
+                            action=AllowedAction.ACCEPT_OBJECTIONS,
+                            parameters={"objection_ids": objection_ids},
+                        )
+
+                    # Second time (or no blockers): approve
+                    return GateResponse(action=AllowedAction.APPROVE)
+
+                # Other gates: approve
+                return GateResponse(action=AllowedAction.APPROVE)
+
+        handler = AcceptThenApproveHandler()
+        engine = Engine(
+            runs_dir=tmp_path,
+            gate_handler=handler,
+            gates_enabled=True,
+        )
+
+        run_dir = engine.run("Should we use Python?")
+
+        # Run should succeed
+        artifact_path = run_dir / "artifact.json"
+        assert artifact_path.exists()
+
+        # Final signoff handler should have been called
+        final_summaries = [
+            s for s in handler.triggered_summaries if s.gate_type == GateType.FINAL_SIGNOFF
+        ]
+        assert len(final_summaries) >= 1
+
+    def test_artifact_includes_objections_summary(self, tmp_path: Path):
+        """Test that final artifact includes objections summary."""
+        engine = Engine(
+            runs_dir=tmp_path,
+            gate_handler=AutoApproveGateHandler(),
+            gates_enabled=False,  # Disable gates to avoid blocking
+        )
+
+        run_dir = engine.run("Should we use Python?")
+
+        artifact_path = run_dir / "artifact.json"
+        with artifact_path.open() as f:
+            artifact = json.load(f)
+
+        # Check objections summary is present
+        assert "objections" in artifact
+        obj_summary = artifact["objections"]
+
+        # Check structure matches _build_objections_summary
+        assert "blocking_open" in obj_summary
+        assert "blocking_accepted" in obj_summary
+        assert "nonblocking_open" in obj_summary
+
+        # Each list should contain dicts with required fields
+        assert isinstance(obj_summary["blocking_open"], list)
+        assert isinstance(obj_summary["blocking_accepted"], list)
+        assert isinstance(obj_summary["nonblocking_open"], list)
+
+    def test_prune_prefers_fewer_blocking_objections(self):
+        """Test that prune prioritizes nodes with fewer blocking objections."""
+        from delibera.engine.operators import prune
+        from delibera.engine.tree import DeliberationTree
+        from delibera.epistemics.ledger import Ledger
+        from delibera.epistemics.models import (
+            Claim,
+            ClaimStatus,
+            ClaimType,
+            Objection,
+            ObjectionSeverity,
+            ObjectionStatus,
+        )
+
+        tree = DeliberationTree()
+        # Create root node first
+        root = tree.create_root("Test question")
+
+        # Create two children with different blocking objection counts
+        node_a = tree.add_child(root.node_id, label="Option A", kind="option")
+        node_b = tree.add_child(root.node_id, label="Option B", kind="option")
+
+        # Node A: 1 blocking objection, higher score
+        node_a.artifact = {"score": 10.0}
+        node_a.ledger = Ledger(
+            claims=[Claim("c1", "claim", ClaimType.PLAN, 0.8, "p", ClaimStatus.SUPPORTED)],
+            objections=[
+                Objection("o1", "c1", ObjectionSeverity.BLOCKING, ObjectionStatus.OPEN, "r", "t")
+            ],
+        )
+
+        # Node B: 0 blocking objections, lower score
+        node_b.artifact = {"score": 5.0}
+        node_b.ledger = Ledger(
+            claims=[Claim("c2", "claim", ClaimType.PLAN, 0.8, "p", ClaimStatus.SUPPORTED)],
+            objections=[],  # No objections
+        )
+
+        # Prune to keep 1
+        survivors, pruned = prune(tree, [node_a.node_id, node_b.node_id], keep_count=1)
+
+        # Node B should survive (fewer blocking objections beats higher score)
+        assert survivors == [node_b.node_id]
+        assert pruned == [node_a.node_id]
+
+    def test_validate_response_accept_objections_valid(self):
+        """Test validation of accept_objections response."""
+        response = GateResponse(
+            action=AllowedAction.ACCEPT_OBJECTIONS,
+            parameters={"objection_ids": ["o1", "o2"]},
+        )
+        errors = validate_response(GateType.FINAL_SIGNOFF, response)
+        assert errors == []
+
+    def test_validate_response_accept_objections_missing_ids(self):
+        """Test validation rejects accept_objections without IDs."""
+        response = GateResponse(
+            action=AllowedAction.ACCEPT_OBJECTIONS,
+            parameters={"objection_ids": []},
+        )
+        errors = validate_response(GateType.FINAL_SIGNOFF, response)
+        assert len(errors) == 1
+        assert "at least one objection" in errors[0]
+
+    def test_validate_response_accept_objections_not_allowed_for_scope(self):
+        """Test validation rejects accept_objections for scope gate."""
+        response = GateResponse(
+            action=AllowedAction.ACCEPT_OBJECTIONS,
+            parameters={"objection_ids": ["o1"]},
+        )
+        errors = validate_response(GateType.SCOPE, response)
+        assert len(errors) == 1
+        assert "not allowed" in errors[0]
