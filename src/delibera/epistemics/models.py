@@ -71,15 +71,24 @@ class Evidence:
 
     Attributes:
         evidence_id: Unique identifier.
-        source: Document, URL, dataset, or internal reference.
+        source: Document, URL, dataset, or file path.
         excerpt: The relevant supporting content.
-        provenance: Link to tool calls or document identifiers.
+        provenance: Structured provenance information (e.g., tool_call_id, node_id).
     """
 
     evidence_id: str
     source: str
     excerpt: str
-    provenance: str
+    provenance: dict[str, str]
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert to dictionary for trace logging."""
+        return {
+            "evidence_id": self.evidence_id,
+            "source": self.source,
+            "excerpt_length": len(self.excerpt),
+            "provenance": self.provenance,
+        }
 
 
 class ObjectionSeverity(str, Enum):

@@ -56,9 +56,15 @@ def create_tree_protocol_v1() -> ProtocolSpec:
                 role="proposer",
             ),
             StepSpec(
+                id="research",
+                kind="work",
+                step_name="RESEARCH",
+                role="researcher",
+            ),
+            StepSpec(
                 id="validate",
                 kind="validate",
-                step_name="VALIDATE",
+                step_name="CLAIM_CHECK",
                 role=None,
             ),
         ],
@@ -106,9 +112,15 @@ def create_simple_protocol() -> ProtocolSpec:
                 role="proposer",
             ),
             StepSpec(
+                id="research",
+                kind="work",
+                step_name="RESEARCH",
+                role="researcher",
+            ),
+            StepSpec(
                 id="validate",
                 kind="validate",
-                step_name="VALIDATE",
+                step_name="CLAIM_CHECK",
                 role=None,
             ),
         ],

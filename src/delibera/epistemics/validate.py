@@ -32,23 +32,55 @@ class ClaimCheckReport:
     details: list[dict[str, str]]
 
 
+def _claim_has_evidence_support(claim: Claim, evidence: list[Evidence]) -> bool:
+    """Check if any evidence excerpt contains keywords from the claim.
+
+    This is a simple heuristic: the claim is considered supported if
+    at least one evidence excerpt contains words from the claim text.
+
+    Args:
+        claim: The claim to check.
+        evidence: Available evidence items.
+
+    Returns:
+        True if evidence supports the claim.
+    """
+    if not evidence:
+        return False
+
+    # Extract keywords from claim text (words of 4+ chars)
+    claim_words = {word.lower().strip(".,;:!?") for word in claim.text.split() if len(word) >= 4}
+
+    # Check if any evidence excerpt contains claim keywords
+    for ev in evidence:
+        excerpt_lower = ev.excerpt.lower()
+        # Supported if at least one keyword appears in excerpt
+        for word in claim_words:
+            if word in excerpt_lower:
+                return True
+
+    return False
+
+
 def validate_claims(
     claims: list[Claim],
     evidence: list[Evidence],
 ) -> ClaimCheckReport:
     """Validate claims based on type and available evidence.
 
-    Validation rules (v1, deterministic):
+    Validation rules (PR #7):
     - plan claims -> supported (no evidence required)
     - value claims -> supported (no evidence required)
-    - inference claims -> weak (no evidence in v1)
-    - fact claims -> unsupported (unless evidence exists)
+    - fact claims -> supported if evidence contains claim keywords,
+                     unsupported otherwise
+    - inference claims -> supported if evidence exists AND no unsupported facts,
+                          weak otherwise
 
     Updates claim.status in-place and returns a summary report.
 
     Args:
         claims: List of claims to validate.
-        evidence: List of available evidence (empty in v1).
+        evidence: List of available evidence from ledger.
 
     Returns:
         ClaimCheckReport summarizing validation results.
@@ -58,9 +90,8 @@ def validate_claims(
     unsupported = 0
     details: list[dict[str, str]] = []
 
-    # Build evidence lookup (unused in v1, but structure is ready)
-    _ = {e.evidence_id: e for e in evidence}
-
+    # First pass: validate fact, plan, and value claims
+    fact_results: dict[str, ClaimStatus] = {}
     for claim in claims:
         if claim.claim_type == ClaimType.PLAN:
             # Plan claims are automatically supported
@@ -70,26 +101,45 @@ def validate_claims(
             # Value claims are automatically supported
             claim.status = ClaimStatus.SUPPORTED
             supported += 1
-        elif claim.claim_type == ClaimType.INFERENCE:
-            # Inference claims are weak without evidence in v1
-            claim.status = ClaimStatus.WEAK
-            weak += 1
         elif claim.claim_type == ClaimType.FACT:
-            # Fact claims require evidence; unsupported by default in v1
-            claim.status = ClaimStatus.UNSUPPORTED
-            unsupported += 1
-        else:
+            # Fact claims: supported if evidence contains keywords
+            if _claim_has_evidence_support(claim, evidence):
+                claim.status = ClaimStatus.SUPPORTED
+                supported += 1
+            else:
+                claim.status = ClaimStatus.UNSUPPORTED
+                unsupported += 1
+            fact_results[claim.claim_id] = claim.status
+        # Skip inference claims for now
+
+    # Count unsupported facts for inference validation
+    unsupported_facts = sum(
+        1 for status in fact_results.values() if status == ClaimStatus.UNSUPPORTED
+    )
+
+    # Second pass: validate inference claims
+    for claim in claims:
+        if claim.claim_type == ClaimType.INFERENCE:
+            # Inference: supported if evidence exists AND no unsupported facts
+            if len(evidence) > 0 and unsupported_facts == 0:
+                claim.status = ClaimStatus.SUPPORTED
+                supported += 1
+            else:
+                claim.status = ClaimStatus.WEAK
+                weak += 1
+        elif claim.claim_type not in (ClaimType.PLAN, ClaimType.VALUE, ClaimType.FACT):
             # Fallback for any unknown type
             claim.status = ClaimStatus.UNSUPPORTED
             unsupported += 1
 
-        details.append(
-            {
-                "claim_id": claim.claim_id,
-                "status": claim.status.value,
-                "type": claim.claim_type.value,
-            }
-        )
+    # Build details list
+    for claim in claims:
+        detail: dict[str, str] = {
+            "claim_id": claim.claim_id,
+            "status": claim.status.value,
+            "type": claim.claim_type.value,
+        }
+        details.append(detail)
 
     return ClaimCheckReport(
         supported=supported,

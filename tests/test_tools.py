@@ -408,39 +408,51 @@ class TestToolRouterIntegration:
         # Check for tool_call events
         tool_events = [e for e in events if e["event_type"].startswith("tool_call")]
 
-        # Should have tool_call_requested and tool_call_executed for each branch (3 branches)
+        # Should have tool_call_requested and tool_call_executed for each branch
+        # (3 branches x 2 tools: calculator in PROPOSE, docs.read in RESEARCH = 6 total)
         requested = [e for e in tool_events if e["event_type"] == "tool_call_requested"]
         executed = [e for e in tool_events if e["event_type"] == "tool_call_executed"]
 
-        assert len(requested) == 3  # One per branch
-        assert len(executed) == 3  # All should succeed
+        assert len(requested) == 6  # 3 branches x 2 tools
+        assert len(executed) == 6  # All should succeed
 
-        # Verify tool name and step
-        for event in requested:
-            assert event["payload"]["tool_name"] == "calculator"
+        # Verify calculator calls from PROPOSE
+        calculator_requests = [e for e in requested if e["payload"]["tool_name"] == "calculator"]
+        assert len(calculator_requests) == 3
+        for event in calculator_requests:
             assert event["payload"]["step"] == "PROPOSE"
             assert event["payload"]["role"] == "proposer"
 
+        # Verify docs.read calls from RESEARCH
+        docs_requests = [e for e in requested if e["payload"]["tool_name"] == "docs.read"]
+        assert len(docs_requests) == 3
+        for event in docs_requests:
+            assert event["payload"]["step"] == "RESEARCH"
+            assert event["payload"]["role"] == "researcher"
+
         # Verify outputs
-        for event in executed:
+        calculator_executed = [e for e in executed if e["payload"]["tool_name"] == "calculator"]
+        for event in calculator_executed:
             assert "result" in event["payload"]["output"]
+
+        docs_executed = [e for e in executed if e["payload"]["tool_name"] == "docs.read"]
+        for event in docs_executed:
+            assert "text" in event["payload"]["output"]
 
     def test_tool_call_denied_logged(self, tmp_path: Path):
         """Test that denied tool calls are logged in trace."""
         from delibera.engine.orchestrator import Engine
         from delibera.tools import GlobalPolicy
 
-        # Create policy that denies calculator
-        policy = PolicyEngine(
-            global_policy=GlobalPolicy(enabled_tools={"web.search"})  # Calculator not allowed
-        )
+        # Create policy that denies calculator and docs.read
+        policy = PolicyEngine(global_policy=GlobalPolicy(enabled_tools={"web.search"}))
 
         engine = Engine(
             runs_dir=tmp_path,
             policy_engine=policy,
         )
 
-        # Run should still succeed (proposer falls back)
+        # Run should still succeed (proposer and researcher fall back)
         run_dir = engine.run("Test question")
 
         # Read trace
@@ -450,12 +462,18 @@ class TestToolRouterIntegration:
             for line in f:
                 events.append(json.loads(line))
 
-        # Check for denied events
+        # Check for denied events (3 calculator + 3 docs.read = 6)
         denied_events = [e for e in events if e["event_type"] == "tool_call_denied"]
-        assert len(denied_events) == 3  # One per branch
+        assert len(denied_events) == 6  # 3 branches x 2 tools
 
-        for event in denied_events:
-            assert event["payload"]["tool_name"] == "calculator"
+        calculator_denied = [e for e in denied_events if e["payload"]["tool_name"] == "calculator"]
+        assert len(calculator_denied) == 3
+        for event in calculator_denied:
+            assert "not in enabled_tools" in event["payload"]["reason"]
+
+        docs_denied = [e for e in denied_events if e["payload"]["tool_name"] == "docs.read"]
+        assert len(docs_denied) == 3
+        for event in docs_denied:
             assert "not in enabled_tools" in event["payload"]["reason"]
 
     def test_claim_check_step_allows_calculator(self, tmp_path: Path):

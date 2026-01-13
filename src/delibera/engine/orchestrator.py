@@ -9,10 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from delibera.agents.stub import PlannerStub, ProposerStub
+from delibera.agents.stub import PlannerStub, ProposerStub, ResearcherStub
 from delibera.engine import operators
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
+from delibera.epistemics.models import Evidence
 from delibera.gates import (
     GATE_ALLOWED_ACTIONS,
     AutoApproveGateHandler,
@@ -244,7 +245,38 @@ class Engine:
                     )
                 )
 
-            # VALIDATE: Extract and validate claims for each branch
+            # RESEARCH: Collect evidence for each branch
+            researcher = ResearcherStub()
+            for child in children:
+                # Create tool callback for this step
+                tool_callback = self.make_tool_callback(
+                    node_id=child.node_id,
+                    role="researcher",
+                    step="RESEARCH",
+                )
+                research_output = researcher.execute(
+                    {"label": child.label, "question": question},
+                    tool=tool_callback,
+                )
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="work_output",
+                        run_id=run_id,
+                        payload={
+                            "step": "RESEARCH",
+                            "node_id": child.node_id,
+                            "role": "researcher",
+                            "output": research_output,
+                        },
+                    )
+                )
+
+                # Merge evidence into node ledger (engine-controlled state update)
+                evidence_items = research_output.get("evidence", [])
+                self._merge_evidence_to_ledger(tree, child.node_id, evidence_items, run_id, writer)
+
+            # CLAIM_CHECK: Extract and validate claims for each branch
             for child in children:
                 report = operators.validate(tree, child.node_id, "proposer")
                 writer.emit(
@@ -568,3 +600,55 @@ class Engine:
             return self.call_tool(node_id, role, step, tool_name, tool_input)
 
         return callback
+
+    def _merge_evidence_to_ledger(
+        self,
+        tree: DeliberationTree,
+        node_id: str,
+        evidence_items: list[dict[str, Any]],
+        run_id: str,
+        writer: TraceWriter,
+    ) -> None:
+        """Merge evidence items from agent output into node ledger.
+
+        This is an engine-controlled state update. Agents return evidence
+        in their output, and the engine merges it into the ledger.
+
+        Args:
+            tree: The deliberation tree.
+            node_id: The node to add evidence to.
+            evidence_items: List of evidence dicts with source and excerpt.
+            run_id: The current run ID.
+            writer: The trace writer.
+        """
+        node = tree.get_node(node_id)
+
+        for i, item in enumerate(evidence_items):
+            # Generate deterministic evidence ID
+            evidence_id = f"ev_{node_id[:4]}_{i}"
+
+            evidence = Evidence(
+                evidence_id=evidence_id,
+                source=item.get("source", ""),
+                excerpt=item.get("excerpt", ""),
+                provenance={
+                    "node_id": node_id,
+                    "step": "RESEARCH",
+                    "role": "researcher",
+                },
+            )
+
+            # Add to ledger
+            node.ledger.evidence.append(evidence)
+
+            # Emit evidence_added trace event
+            writer.emit(
+                TraceEvent(
+                    event_type="evidence_added",
+                    run_id=run_id,
+                    payload={
+                        "node_id": node_id,
+                        "evidence": evidence.to_dict(),
+                    },
+                )
+            )

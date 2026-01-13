@@ -13,7 +13,7 @@ The router:
 from collections.abc import Callable
 from typing import Any
 
-from delibera.tools.policy import PolicyDecision, PolicyEngine
+from delibera.tools.policy import PolicyContext, PolicyDecision, PolicyEngine
 from delibera.tools.registry import ToolRegistry
 from delibera.tools.spec import ToolDenied, ToolExecutionError
 
@@ -53,6 +53,7 @@ class ToolRouter:
         tool_name: str,
         tool_input: dict[str, Any],
         node_id: str | None = None,
+        policy_context: PolicyContext | None = None,
     ) -> dict[str, Any]:
         """Execute a tool call through policy evaluation.
 
@@ -62,6 +63,7 @@ class ToolRouter:
             tool_name: The name of the tool to call.
             tool_input: The input to pass to the tool.
             node_id: Optional node ID for scoped tool calls.
+            policy_context: Optional policy context with allowed evidence sources.
 
         Returns:
             The tool output dictionary.
@@ -82,13 +84,15 @@ class ToolRouter:
 
         tool = self._registry.get(tool_name)
 
-        # Evaluate policy
+        # Evaluate policy (with evidence-local support)
         decision = self._policy.evaluate(
             role=role,
             step=step,
             tool_name=tool_name,
             is_discovery=tool.is_discovery,
             risk_level=tool.risk_level,
+            tool_input=tool_input,
+            context=policy_context,
         )
 
         if not decision.allow:

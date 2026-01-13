@@ -145,3 +145,125 @@ class SubplannerStub:
             "role": "subplanner",
             "step": "SUBPLAN",
         }
+
+
+class ResearcherStub:
+    """Stub researcher that collects evidence via docs.read tool.
+
+    Deterministically reads from evidence/uv_notes.txt and extracts
+    an excerpt based on the option label.
+
+    Evidence is returned in a structured format for the engine to
+    merge into the node ledger.
+    """
+
+    # Map option letters to search terms for deterministic excerpt selection
+    _SEARCH_TERMS: dict[str, str] = {
+        "A": "fast",  # Will find "10-100x faster"
+        "B": "compatible",  # Will find "Compatible with"
+        "C": "reproducible",  # Will find "reproducible uv.lock"
+    }
+
+    # Default evidence file
+    _EVIDENCE_FILE = "evidence/uv_notes.txt"
+
+    def execute(
+        self,
+        context: dict[str, Any],
+        tool: "ToolCallback | None" = None,
+    ) -> dict[str, Any]:
+        """Collect evidence for a branch.
+
+        Args:
+            context: Must contain "label" key with branch label.
+            tool: Tool callback for docs.read.
+
+        Returns:
+            Dict with evidence items and notes.
+        """
+        label = context.get("label", "")
+
+        # Extract option letter
+        option_letter = "A"  # default
+        for letter in ["A", "B", "C"]:
+            if f"Option {letter}" in label:
+                option_letter = letter
+                break
+
+        # Get search term for this option
+        search_term = self._SEARCH_TERMS.get(option_letter, "fast")
+
+        evidence_items: list[dict[str, Any]] = []
+        notes: list[str] = []
+
+        if tool is not None:
+            try:
+                # Read the evidence file
+                result = tool("docs.read", {"path": self._EVIDENCE_FILE})
+                text = result.get("text", "")
+
+                # Extract an excerpt containing the search term
+                excerpt = self._extract_excerpt(text, search_term)
+
+                if excerpt:
+                    evidence_items.append(
+                        {
+                            "source": self._EVIDENCE_FILE,
+                            "excerpt": excerpt,
+                        }
+                    )
+                    notes.append(f"Found evidence for '{search_term}' in {self._EVIDENCE_FILE}")
+                else:
+                    notes.append(f"No excerpt found for '{search_term}'")
+
+            except Exception as e:
+                notes.append(f"Failed to read evidence: {e}")
+        else:
+            notes.append("No tool callback provided; skipping evidence collection")
+
+        return {
+            "evidence": evidence_items,
+            "notes": notes,
+            "role": "researcher",
+            "step": "RESEARCH",
+        }
+
+    def _extract_excerpt(self, text: str, search_term: str) -> str:
+        """Extract an excerpt containing the search term.
+
+        Args:
+            text: The full document text.
+            search_term: The term to search for.
+
+        Returns:
+            A short excerpt (up to 200 chars) containing the term, or empty string.
+        """
+        # Case-insensitive search
+        lower_text = text.lower()
+        search_lower = search_term.lower()
+
+        pos = lower_text.find(search_lower)
+        if pos == -1:
+            return ""
+
+        # Extract context around the match
+        start = max(0, pos - 50)
+        end = min(len(text), pos + 150)
+
+        # Find line boundaries for cleaner excerpt
+        excerpt = text[start:end]
+
+        # Trim to complete words at boundaries
+        if start > 0:
+            # Find first space and trim before it
+            space_pos = excerpt.find(" ")
+            if space_pos > 0 and space_pos < 20:
+                excerpt = "..." + excerpt[space_pos + 1 :]
+
+        if end < len(text):
+            # Find last space and trim after it
+            space_pos = excerpt.rfind(" ")
+            if space_pos > len(excerpt) - 20:
+                excerpt = excerpt[:space_pos] + "..."
+
+        return excerpt.strip()

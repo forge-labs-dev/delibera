@@ -104,7 +104,9 @@ def create_default_registry() -> ToolRegistry:
         A ToolRegistry pre-populated with built-in tools.
     """
     from delibera.tools.builtin.calculator import CalculatorTool
+    from delibera.tools.builtin.docs import DocsReadTool
 
     registry = ToolRegistry()
     registry.register(CalculatorTool())
+    registry.register(DocsReadTool())
     return registry
