@@ -85,6 +85,17 @@ class RolePolicy:
 
 
 @dataclass
+class PolicyContext:
+    """Context for policy evaluation.
+
+    Provides additional information needed for evidence-local restrictions.
+    """
+
+    # Sources already in ledger that can be accessed during CLAIM_CHECK
+    allowed_evidence_sources: set[str] = field(default_factory=set)
+
+
+@dataclass
 class StepPolicyOverride:
     """Step-level policy overrides.
 
@@ -95,18 +106,24 @@ class StepPolicyOverride:
     # Steps where discovery tools are denied
     evidence_local_steps: set[str] = field(default_factory=lambda: {"CLAIM_CHECK"})
 
+    # Tools subject to evidence-local source check
+    evidence_local_tools: set[str] = field(default_factory=lambda: {"docs.read"})
+
     def allows(
         self,
         step: str,
-        tool_name: str,  # noqa: ARG002 - Reserved for future per-tool step rules
+        tool_name: str,
         is_discovery: bool,
         risk_level: RiskLevel,
+        tool_input: dict[str, Any] | None = None,
+        context: PolicyContext | None = None,
     ) -> PolicyDecision:
         """Check if tool is allowed in current step.
 
         During evidence-local steps (like CLAIM_CHECK):
         - Discovery tools are denied
         - High-risk tools are denied
+        - docs.read only allowed for sources already in ledger
         """
         if step not in self.evidence_local_steps:
             return PolicyDecision(allow=True, reason=f"step: no override for '{step}'")
@@ -124,6 +141,21 @@ class StepPolicyOverride:
                 allow=False,
                 reason=f"step: high-risk tools denied during '{step}'",
             )
+
+        # Evidence-local mode: check source restriction for docs.read
+        if tool_name in self.evidence_local_tools:
+            if context is None or tool_input is None:
+                return PolicyDecision(
+                    allow=False,
+                    reason=f"step: {tool_name} requires evidence-local context during '{step}'",
+                )
+
+            path = tool_input.get("path", "")
+            if path not in context.allowed_evidence_sources:
+                return PolicyDecision(
+                    allow=False,
+                    reason=f"step: source '{path}' not in allowed evidence during '{step}'",
+                )
 
         return PolicyDecision(
             allow=True,
@@ -175,6 +207,8 @@ class PolicyEngine:
         tool_name: str,
         is_discovery: bool = False,
         risk_level: RiskLevel = RiskLevel.LOW,
+        tool_input: dict[str, Any] | None = None,
+        context: PolicyContext | None = None,
     ) -> PolicyDecision:
         """Evaluate all policy layers for a tool call.
 
@@ -184,6 +218,8 @@ class PolicyEngine:
             tool_name: The name of the tool being requested.
             is_discovery: Whether the tool discovers new information.
             risk_level: The risk classification of the tool.
+            tool_input: The tool input (for evidence-local checks).
+            context: Policy context with allowed evidence sources.
 
         Returns:
             PolicyDecision indicating allow/deny with reason.
@@ -198,8 +234,10 @@ class PolicyEngine:
         if not role_decision.allow:
             return role_decision
 
-        # Layer 3: Step override
-        step_decision = self.step_override.allows(step, tool_name, is_discovery, risk_level)
+        # Layer 3: Step override (with evidence-local support)
+        step_decision = self.step_override.allows(
+            step, tool_name, is_discovery, risk_level, tool_input, context
+        )
         if not step_decision.allow:
             return step_decision
 
@@ -241,7 +279,7 @@ def create_default_policy_engine() -> PolicyEngine:
         PolicyEngine with all built-in tools enabled.
     """
     global_policy = GlobalPolicy(
-        enabled_tools={"calculator"},  # Enable built-in tools
+        enabled_tools={"calculator", "docs.read"},  # Enable built-in tools
         max_calls=100,  # Default budget
     )
     return PolicyEngine(global_policy=global_policy)

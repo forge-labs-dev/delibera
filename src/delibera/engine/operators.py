@@ -37,7 +37,7 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
 
     This operator:
     1. Extracts claims from the node's artifact
-    2. Validates claims (updating their status)
+    2. Validates claims using ledger evidence
     3. Stores claims in the node's ledger
     4. Returns a validation report
 
@@ -54,8 +54,8 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
     # Extract claims from artifact
     claims = extract_claims(node_id, node.artifact, owner)
 
-    # Validate claims (empty evidence in v1)
-    report = validate_claims(claims, evidence=[])
+    # Validate claims using ledger evidence
+    report = validate_claims(claims, evidence=node.ledger.evidence)
 
     # Store claims in ledger
     node.ledger.claims = claims

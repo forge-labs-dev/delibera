@@ -192,7 +192,7 @@ class TestProtocolDefaults:
         assert len(spec.expand_rules) == 1
         assert spec.expand_rules[0].at_step_id == "plan"
         assert spec.expand_rules[0].max_children == 3
-        assert len(spec.branch_pipeline) == 2  # propose, validate
+        assert len(spec.branch_pipeline) == 3  # propose, research, validate
         assert spec.prune.keep_k == 2
 
     def test_tree_protocol_v1_structure(self) -> None:
@@ -285,8 +285,11 @@ class TestProtocolInterpreter:
         assert step.id == "propose"
         step = interpreter.get_branch_pipeline_step(1)
         assert step is not None
-        assert step.id == "validate"
+        assert step.id == "research"
         step = interpreter.get_branch_pipeline_step(2)
+        assert step is not None
+        assert step.id == "validate"
+        step = interpreter.get_branch_pipeline_step(3)
         assert step is None  # Out of bounds
 
 

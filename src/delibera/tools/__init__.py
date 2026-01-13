@@ -9,6 +9,7 @@ from typing import Any
 from delibera.tools.policy import (
     BudgetState,
     GlobalPolicy,
+    PolicyContext,
     PolicyDecision,
     PolicyEngine,
     RolePolicy,
@@ -33,6 +34,7 @@ __all__ = [
     "create_default_registry",
     # Policy
     "PolicyEngine",
+    "PolicyContext",
     "PolicyDecision",
     "GlobalPolicy",
     "RolePolicy",

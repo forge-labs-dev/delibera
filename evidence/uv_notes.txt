@@ -1,0 +1,33 @@
+UV Package Manager - Technical Notes
+
+UV is an extremely fast Python package and project manager, written in Rust.
+
+Key Features:
+- Installation speed: 10-100x faster than pip
+- Disk space: Uses a global cache to deduplicate dependencies
+- Drop-in replacement: Compatible with pip, pip-tools, and virtualenv workflows
+- Lockfile support: Generates reproducible uv.lock files
+- Python version management: Can install and manage Python versions
+
+Performance Claims:
+- Benchmarks show UV resolving and installing dependencies in seconds
+- The cold cache performance is still faster than pip's warm cache
+
+Compatibility:
+- Works with existing requirements.txt files
+- Supports pyproject.toml with PEP 621 metadata
+- Compatible with pip's command-line interface
+
+Installation Methods:
+- curl -LsSf https://astral.sh/uv/install.sh | sh
+- pip install uv
+- pipx install uv
+
+Common Commands:
+- uv pip install <package>: Install packages
+- uv pip sync requirements.txt: Sync environment to requirements
+- uv venv: Create virtual environment
+- uv lock: Generate lockfile
+- uv run: Run commands in project environment
+
+Source: Astral documentation and benchmarks (2024)
