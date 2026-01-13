@@ -126,6 +126,13 @@ class DocsReadTool:
                 f"Path is not a file: {relative_path}",
             )
 
+        # Reject symlinks to prevent escaping evidence directory
+        if full_path.is_symlink():
+            raise ToolExecutionError(
+                self.name,
+                f"Symlinks are not allowed: {relative_path}",
+            )
+
         # Check file size
         file_size = full_path.stat().st_size
         if file_size > MAX_FILE_SIZE:

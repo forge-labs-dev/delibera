@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from delibera.tools.spec import ToolDenied, ToolExecutionError
+
 if TYPE_CHECKING:
     from delibera.tools import ToolCallback
 
@@ -216,7 +218,12 @@ class ResearcherStub:
                 else:
                     notes.append(f"No excerpt found for '{search_term}'")
 
-            except Exception as e:
+            except (KeyError, ValueError, OSError, ToolDenied, ToolExecutionError) as e:
+                # KeyError: tool not registered
+                # ValueError: invalid input
+                # OSError: file read error
+                # ToolDenied: policy denied tool access
+                # ToolExecutionError: tool execution failed
                 notes.append(f"Failed to read evidence: {e}")
         else:
             notes.append("No tool callback provided; skipping evidence collection")

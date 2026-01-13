@@ -61,6 +61,24 @@ class TestDocsReadTool:
         with pytest.raises(ValueError, match="cannot be empty"):
             tool.validate_input({"path": ""})
 
+    def test_rejects_symlinks(self, tmp_path: Path) -> None:
+        """Test that symlinks are rejected."""
+        # Create evidence directory with a file
+        evidence_dir = tmp_path / "evidence"
+        evidence_dir.mkdir()
+        real_file = evidence_dir / "real.txt"
+        real_file.write_text("content")
+
+        # Create symlink
+        symlink = evidence_dir / "link.txt"
+        symlink.symlink_to(real_file)
+
+        from delibera.tools.spec import ToolExecutionError
+
+        tool = DocsReadTool(evidence_root=evidence_dir)
+        with pytest.raises(ToolExecutionError, match="Symlinks are not allowed"):
+            tool.execute({"path": "link.txt"})
+
 
 class TestResearchAddsEvidence:
     """Tests for evidence collection via RESEARCH step."""
