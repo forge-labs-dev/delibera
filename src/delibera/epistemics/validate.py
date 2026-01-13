@@ -28,6 +28,7 @@ class ClaimCheckReport:
         weak: Count of weak claims.
         unsupported: Count of unsupported claims.
         details: List of per-claim status details with supporting_evidence_ids.
+        support_relations: Mapping of claim_id to list of supporting evidence_ids.
     """
 
     supported: int
