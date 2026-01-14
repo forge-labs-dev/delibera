@@ -306,15 +306,27 @@ def _parse_reduce_spec(data: dict[str, Any], path: str) -> ReduceSpec:
 
 def _parse_convergence_spec(data: dict[str, Any], path: str) -> ConvergenceSpec:
     """Parse a convergence specification from a dictionary."""
-    known_keys = {"max_rounds"}
+    known_keys = {"max_rounds", "weak_threshold", "score_epsilon"}
     _check_unknown_keys(data, known_keys, path)
 
     max_rounds = data.get("max_rounds", 0)
     if not isinstance(max_rounds, int):
         raise ProtocolLoadError("Expected integer", f"{path}.max_rounds")
 
+    weak_threshold = data.get("weak_threshold", 5)
+    if not isinstance(weak_threshold, int):
+        raise ProtocolLoadError("Expected integer", f"{path}.weak_threshold")
+
+    score_epsilon = data.get("score_epsilon", 0.01)
+    if not isinstance(score_epsilon, (int, float)):
+        raise ProtocolLoadError("Expected number", f"{path}.score_epsilon")
+
     try:
-        return ConvergenceSpec(max_rounds=max_rounds)
+        return ConvergenceSpec(
+            max_rounds=max_rounds,
+            weak_threshold=weak_threshold,
+            score_epsilon=float(score_epsilon),
+        )
     except ValueError as e:
         raise ProtocolLoadError(str(e), path) from e
 

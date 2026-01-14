@@ -279,7 +279,7 @@ def create_default_policy_engine() -> PolicyEngine:
         PolicyEngine with all built-in tools enabled.
     """
     global_policy = GlobalPolicy(
-        enabled_tools={"calculator", "docs.read"},  # Enable built-in tools
+        enabled_tools={"calculator", "docs.read", "docs.search"},  # Enable built-in tools
         max_calls=100,  # Default budget
     )
     return PolicyEngine(global_policy=global_policy)

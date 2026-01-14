@@ -409,12 +409,12 @@ class TestToolRouterIntegration:
         tool_events = [e for e in events if e["event_type"].startswith("tool_call")]
 
         # Should have tool_call_requested and tool_call_executed for each branch
-        # (3 branches x 2 tools: calculator in PROPOSE, docs.read in RESEARCH = 6 total)
+        # 3 branches x 3 tools: calculator in PROPOSE, docs.search + docs.read in RESEARCH = 9
         requested = [e for e in tool_events if e["event_type"] == "tool_call_requested"]
         executed = [e for e in tool_events if e["event_type"] == "tool_call_executed"]
 
-        assert len(requested) == 6  # 3 branches x 2 tools
-        assert len(executed) == 6  # All should succeed
+        assert len(requested) == 9  # 3 branches x 3 tools
+        assert len(executed) == 9  # All should succeed
 
         # Verify calculator calls from PROPOSE
         calculator_requests = [e for e in requested if e["payload"]["tool_name"] == "calculator"]
@@ -423,10 +423,17 @@ class TestToolRouterIntegration:
             assert event["payload"]["step"] == "PROPOSE"
             assert event["payload"]["role"] == "proposer"
 
+        # Verify docs.search calls from RESEARCH
+        docs_search_requests = [e for e in requested if e["payload"]["tool_name"] == "docs.search"]
+        assert len(docs_search_requests) == 3
+        for event in docs_search_requests:
+            assert event["payload"]["step"] == "RESEARCH"
+            assert event["payload"]["role"] == "researcher"
+
         # Verify docs.read calls from RESEARCH
-        docs_requests = [e for e in requested if e["payload"]["tool_name"] == "docs.read"]
-        assert len(docs_requests) == 3
-        for event in docs_requests:
+        docs_read_requests = [e for e in requested if e["payload"]["tool_name"] == "docs.read"]
+        assert len(docs_read_requests) == 3
+        for event in docs_read_requests:
             assert event["payload"]["step"] == "RESEARCH"
             assert event["payload"]["role"] == "researcher"
 
@@ -435,8 +442,12 @@ class TestToolRouterIntegration:
         for event in calculator_executed:
             assert "result" in event["payload"]["output"]
 
-        docs_executed = [e for e in executed if e["payload"]["tool_name"] == "docs.read"]
-        for event in docs_executed:
+        docs_search_executed = [e for e in executed if e["payload"]["tool_name"] == "docs.search"]
+        for event in docs_search_executed:
+            assert "results" in event["payload"]["output"]
+
+        docs_read_executed = [e for e in executed if e["payload"]["tool_name"] == "docs.read"]
+        for event in docs_read_executed:
             assert "text" in event["payload"]["output"]
 
     def test_tool_call_denied_logged(self, tmp_path: Path):
@@ -463,18 +474,25 @@ class TestToolRouterIntegration:
             for line in f:
                 events.append(json.loads(line))
 
-        # Check for denied events (3 calculator + 3 docs.read = 6)
+        # Check for denied events (3 calculator + 3 docs.search + 3 docs.read = 9)
         denied_events = [e for e in events if e["event_type"] == "tool_call_denied"]
-        assert len(denied_events) == 6  # 3 branches x 2 tools
+        assert len(denied_events) == 9  # 3 branches x 3 tools
 
         calculator_denied = [e for e in denied_events if e["payload"]["tool_name"] == "calculator"]
         assert len(calculator_denied) == 3
         for event in calculator_denied:
             assert "not in enabled_tools" in event["payload"]["reason"]
 
-        docs_denied = [e for e in denied_events if e["payload"]["tool_name"] == "docs.read"]
-        assert len(docs_denied) == 3
-        for event in docs_denied:
+        docs_search_denied = [
+            e for e in denied_events if e["payload"]["tool_name"] == "docs.search"
+        ]
+        assert len(docs_search_denied) == 3
+        for event in docs_search_denied:
+            assert "not in enabled_tools" in event["payload"]["reason"]
+
+        docs_read_denied = [e for e in denied_events if e["payload"]["tool_name"] == "docs.read"]
+        assert len(docs_read_denied) == 3
+        for event in docs_read_denied:
             assert "not in enabled_tools" in event["payload"]["reason"]
 
     def test_claim_check_step_allows_calculator(self, tmp_path: Path):

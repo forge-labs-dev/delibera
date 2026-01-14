@@ -6,11 +6,17 @@ from pathlib import Path
 
 import click
 
+from delibera.__version__ import __version__
 from delibera.engine.orchestrator import Engine
 from delibera.eval import EvalSuiteLoadError, load_eval_suite, run_eval_suite
 from delibera.gates import AutoApproveGateHandler, CLIGateHandler, GateAborted, GateHandler
 from delibera.gates.predicates import DEFAULT_TIE_THRESHOLD
-from delibera.protocol import ProtocolLoadError, ProtocolSpec, load_protocol_from_yaml
+from delibera.protocol import (
+    ProtocolLoadError,
+    ProtocolSpec,
+    load_protocol_from_yaml,
+    warnings_for_protocol,
+)
 from delibera.scoring import ScoreWeights
 from delibera.trace.reader import load_artifact
 from delibera.trace.replay import replay_from_directory, verify_replay
@@ -51,9 +57,16 @@ def _parse_weights(weights_str: str) -> ScoreWeights:
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="delibera")
 def main() -> None:
     """Delibera - An engine for decision-grade AI deliberation."""
     pass
+
+
+@main.command()
+def version() -> None:
+    """Print the Delibera version."""
+    click.echo(f"delibera {__version__}")
 
 
 @main.command()
@@ -92,6 +105,36 @@ def main() -> None:
     default=None,
     help="Path to YAML protocol file. If not provided, uses builtin default.",
 )
+@click.option(
+    "--use-llm-proposer",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed proposer instead of stub. Requires GEMINI_API_KEY.",
+)
+@click.option(
+    "--llm-provider",
+    type=click.Choice(["gemini"]),
+    default="gemini",
+    help="LLM provider to use. Default: gemini.",
+)
+@click.option(
+    "--llm-model",
+    type=str,
+    default=None,
+    help="LLM model name (e.g., 'gemini-1.5-flash'). If not set, uses provider default.",
+)
+@click.option(
+    "--llm-temperature",
+    type=float,
+    default=0.2,
+    help="LLM temperature (0.0-2.0). Default: 0.2.",
+)
+@click.option(
+    "--llm-max-output-tokens",
+    type=int,
+    default=800,
+    help="Maximum output tokens for LLM. Default: 800.",
+)
 def run(
     question: str,
     gates: bool,
@@ -99,6 +142,11 @@ def run(
     tie_threshold: float,
     weights: str | None,
     protocol: str | None,
+    use_llm_proposer: bool,
+    llm_provider: str,
+    llm_model: str | None,
+    llm_temperature: float,
+    llm_max_output_tokens: int,
 ) -> None:
     """Run a deliberation on the given question.
 
@@ -110,6 +158,8 @@ def run(
     Use --tie-threshold to adjust when the tradeoff gate fires (lower = more sensitive).
     Use --weights to set scoring weights directly, which skips the tradeoff gate.
     Use --protocol to specify a YAML protocol file.
+
+    To use LLM-backed proposer, set --use-llm-proposer and ensure GEMINI_API_KEY is set.
     """
     # Determine gate handler
     gate_handler: GateHandler
@@ -139,11 +189,30 @@ def run(
         try:
             protocol_spec = load_protocol_from_yaml(protocol_path)
             protocol_source = f"yaml:{protocol_path}"
+            # Show warnings for protocol configuration issues
+            warnings = warnings_for_protocol(protocol_spec)
+            for warning in warnings:
+                click.echo(f"Warning: {warning}", err=True)
         except ProtocolLoadError as e:
             click.echo(f"Error loading protocol: {e}", err=True)
             sys.exit(1)
         except FileNotFoundError as e:
             click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+
+    # Initialize LLM client if using LLM proposer
+    llm_client = None
+    if use_llm_proposer and llm_provider == "gemini":
+        from delibera.llm import GEMINI_API_KEY_ENV, GeminiClient, LLMAuthError
+
+        try:
+            llm_client = GeminiClient(
+                model=llm_model or "gemini-1.5-flash",
+            )
+            click.echo(f"LLM proposer enabled: {llm_provider} ({llm_model or 'default'})")
+        except LLMAuthError as e:
+            click.echo(f"Error: {e}", err=True)
+            click.echo(f"Set {GEMINI_API_KEY_ENV} environment variable.", err=True)
             sys.exit(1)
 
     engine = Engine(
@@ -153,6 +222,11 @@ def run(
         initial_weights=initial_weights,
         protocol=protocol_spec,
         protocol_source=protocol_source,
+        llm_client=llm_client,
+        use_llm_proposer=use_llm_proposer,
+        llm_model=llm_model,
+        llm_temperature=llm_temperature,
+        llm_max_output_tokens=llm_max_output_tokens,
     )
 
     try:
@@ -163,6 +237,16 @@ def run(
     except GateAborted as e:
         click.echo(f"Run aborted: {e.message}", err=True)
         click.echo(f"Gate: {e.gate_type.value}", err=True)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\nRun interrupted by user.", err=True)
+        sys.exit(130)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: Unexpected failure during run: {e}", err=True)
+        click.echo("Check that ANTHROPIC_API_KEY is set and valid.", err=True)
         sys.exit(1)
 
 
@@ -343,6 +427,169 @@ def eval_cmd(suite: str, fail_fast: bool, save_results: str | None) -> None:
 
     # Exit with error code if any failures
     if failed_count > 0:
+        sys.exit(1)
+
+
+@main.command()
+@click.option(
+    "--run-id",
+    help="Run ID to inspect (looks in ./runs/<run_id>/).",
+)
+@click.option(
+    "--path",
+    type=click.Path(exists=True),
+    help="Path to run directory containing trace.jsonl.",
+)
+def inspect(run_id: str | None, path: str | None) -> None:
+    """Inspect a deliberation run and print a readable summary.
+
+    This command loads the trace and artifact from a completed run
+    and displays a human-readable summary including:
+
+    - Final recommendation
+    - Selected path through the deliberation tree
+    - Key claims with citations
+    - Pruning decisions
+    - Statistics
+
+    This is read-only and does not create new runs or call agents.
+
+    Use either --run-id or --path to specify the run to inspect.
+    """
+    from delibera.inspect import build_run_summary, render_text
+
+    # Determine run directory
+    if path:
+        run_dir = Path(path)
+    elif run_id:
+        run_dir = Path("runs") / run_id
+    else:
+        click.echo("Error: Must provide either --run-id or --path", err=True)
+        sys.exit(1)
+
+    # Check directory exists
+    if not run_dir.exists():
+        click.echo(f"Error: Run directory not found: {run_dir}", err=True)
+        sys.exit(1)
+
+    # Check trace file exists
+    trace_path = run_dir / "trace.jsonl"
+    if not trace_path.exists():
+        click.echo(f"Error: Trace file not found: {trace_path}", err=True)
+        sys.exit(1)
+
+    # Build summary
+    try:
+        summary = build_run_summary(run_dir)
+    except Exception as e:
+        click.echo(f"Error: Failed to build summary: {e}", err=True)
+        sys.exit(1)
+
+    # Render and print
+    output = render_text(summary)
+    click.echo(output)
+
+    # Exit with error if there were errors in reconstruction
+    if summary.errors:
+        sys.exit(1)
+
+
+@main.command()
+@click.option(
+    "--run-id",
+    help="Run ID to generate report for (looks in ./runs/<run_id>/).",
+)
+@click.option(
+    "--path",
+    type=click.Path(exists=True),
+    help="Path to run directory containing trace.jsonl.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["md", "markdown"]),
+    default="md",
+    help="Output format. Default: md (Markdown).",
+)
+@click.option(
+    "--out",
+    required=True,
+    type=click.Path(),
+    help="Output file path for the report.",
+)
+def report(
+    run_id: str | None,
+    path: str | None,
+    output_format: str,
+    out: str,
+) -> None:
+    """Generate a report from a deliberation run.
+
+    This command loads the trace and artifact from a completed run
+    and generates a deterministic report file.
+
+    The report includes:
+    - Run overview and metadata
+    - Final recommendation
+    - Decision explanation
+    - Selected path with node details
+    - Key claims with citations
+    - Pruning history
+    - Statistics
+
+    This is read-only and does not create new runs or call agents.
+
+    Use either --run-id or --path to specify the run.
+    """
+    from delibera.inspect import build_run_summary, render_markdown
+
+    # Determine run directory
+    if path:
+        run_dir = Path(path)
+    elif run_id:
+        run_dir = Path("runs") / run_id
+    else:
+        click.echo("Error: Must provide either --run-id or --path", err=True)
+        sys.exit(1)
+
+    # Check directory exists
+    if not run_dir.exists():
+        click.echo(f"Error: Run directory not found: {run_dir}", err=True)
+        sys.exit(1)
+
+    # Check trace file exists
+    trace_path = run_dir / "trace.jsonl"
+    if not trace_path.exists():
+        click.echo(f"Error: Trace file not found: {trace_path}", err=True)
+        sys.exit(1)
+
+    # Build summary
+    try:
+        summary = build_run_summary(run_dir)
+    except Exception as e:
+        click.echo(f"Error: Failed to build summary: {e}", err=True)
+        sys.exit(1)
+
+    # Render based on format
+    if output_format in ("md", "markdown"):
+        content = render_markdown(summary)
+    else:
+        # Fallback (shouldn't happen due to click.Choice)
+        content = render_markdown(summary)
+
+    # Write output
+    out_path = Path(out)
+    try:
+        out_path.write_text(content, encoding="utf-8")
+    except Exception as e:
+        click.echo(f"Error: Failed to write report: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Report written to: {out_path}")
+
+    # Exit with error if there were errors in reconstruction
+    if summary.errors:
+        click.echo("Warning: Report generated with errors", err=True)
         sys.exit(1)
 
 

@@ -74,14 +74,27 @@ class ReduceSpec:
 
 @dataclass
 class ConvergenceSpec:
-    """Specification for convergence behavior."""
+    """Specification for convergence behavior.
+
+    Convergence predicates (all must be True to converge early):
+    1. no_blocking_objections: No open blocking objections remain
+    2. unsupported_claims == 0: All claims are supported or weak
+    3. weak_claims <= weak_threshold: Number of weak claims is acceptable
+    4. score_improvement < score_epsilon: Score delta between rounds is minimal
+    """
 
     max_rounds: int = 0  # For refine loop; 0 means no refinement
+    weak_threshold: int = 5  # Maximum acceptable weak claims for convergence
+    score_epsilon: float = 0.01  # Minimum score improvement to continue refining
 
     def __post_init__(self) -> None:
         """Validate convergence specification."""
         if self.max_rounds < 0:
             raise ValueError(f"max_rounds must be >= 0, got {self.max_rounds}")
+        if self.weak_threshold < 0:
+            raise ValueError(f"weak_threshold must be >= 0, got {self.weak_threshold}")
+        if self.score_epsilon < 0:
+            raise ValueError(f"score_epsilon must be >= 0, got {self.score_epsilon}")
 
 
 @dataclass
@@ -192,4 +205,48 @@ def validate_protocol(spec: ProtocolSpec) -> list[str]:
     if not spec.branch_pipeline:
         errors.append("branch_pipeline cannot be empty")
 
+    # Check expand rule depth vs max_depth
+    for expand in spec.expand_rules:
+        if expand.depth > spec.max_depth:
+            errors.append(
+                f"Expand rule '{expand.id}' has depth {expand.depth} "
+                f"but max_depth is {spec.max_depth}"
+            )
+
+    # Check refine_loop without convergence.max_rounds (warn-level, not error)
+    # This is a warning, so we don't add it to errors list but the caller
+    # can detect this via warnings_for_protocol()
+
     return errors
+
+
+def warnings_for_protocol(spec: ProtocolSpec) -> list[str]:
+    """Return warnings for a protocol specification.
+
+    These are not blocking errors, but indicate potential issues.
+
+    Args:
+        spec: The protocol specification to check.
+
+    Returns:
+        List of warning messages (empty if none).
+    """
+    warnings: list[str] = []
+
+    # Warn if refine_loop is defined but max_rounds is 0
+    if spec.refine_loop and spec.convergence.max_rounds == 0:
+        warnings.append(
+            "refine_loop is defined but convergence.max_rounds is 0; "
+            "refinement loop will never execute"
+        )
+
+    # Warn if keep_k > expand max_children (makes pruning pointless)
+    for expand in spec.expand_rules:
+        if spec.prune.keep_k >= expand.max_children:
+            warnings.append(
+                f"prune.keep_k ({spec.prune.keep_k}) >= "
+                f"expand rule '{expand.id}' max_children ({expand.max_children}); "
+                f"pruning will keep all children"
+            )
+
+    return warnings

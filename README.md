@@ -2,95 +2,183 @@
 
 An engine for **decision-grade AI deliberation**.
 
-## What is Delibera?
+Delibera is an open-source framework that makes multi-agent reasoning **structured, governed, and auditable**. Unlike chat-based AI systems, Delibera treats deliberation as a process—not a conversation. The engine controls tree expansion, pruning, and convergence while agents contribute content. Every run can be replayed without re-invoking LLMs.
 
-Delibera is an open-source framework that makes multi-agent reasoning **structured, governed, and auditable**. Unlike chat-based AI systems, Delibera treats deliberation as a process—not a conversation.
+## Key Concepts
 
-**Key features:**
+| Concept | Description |
+|---------|-------------|
+| **Engine** | Central orchestrator that controls tree structure and termination. Agents propose; the engine decides. |
+| **Protocol** | Declarative YAML spec defining expansion rules, branch pipelines, pruning, and convergence criteria. |
+| **Epistemics** | Explicit tracking of claims, evidence, and objections. Fact claims require evidence; inferences must follow from supported facts. |
+| **Gates** | Structured human-in-the-loop checkpoints for scope clarification, tradeoffs, and final approval. |
+| **Replay** | Full runs can be reconstructed from trace logs without calling agents or tools. |
 
-- **Governed tree search** — Deliberation is modeled as a tree with explicit expansion, pruning, and reduction operators controlled by the engine (not agents)
-- **Epistemic tracking** — Claims, evidence, and objections are explicit objects that are validated and auditable
-- **Deterministic convergence** — Runs terminate based on measurable predicates, not "when it feels done"
-- **Full traceability** — Every run can be replayed without re-invoking LLMs or tools
-- **Policy-controlled tools** — All external tool access is governed by layered policies
+## Quick Start
 
-**Use cases:** Research synthesis, architecture review, due diligence, strategy analysis, risk assessment.
+### Installation
 
-For detailed documentation, see [docs/index.md](docs/index.md).
+```bash
+# Install from PyPI
+pip install delibera
+
+# Or clone and install with uv
+git clone https://github.com/forge-labs-dev/delibera.git
+cd delibera
+uv sync
+```
+
+### Run a Deliberation
+
+```bash
+# Basic run with interactive gates (uses stub agents)
+delibera run --question "Should we adopt uv for dependency management?"
+
+# Run with auto-approved gates (for CI/scripts)
+delibera run --question "Should we adopt uv?" --auto-approve-gates
+
+# Run with a custom protocol
+delibera run --question "Your question" --protocol protocols/tree_v1.yaml
+```
+
+### Run with LLM-Backed Proposer
+
+To use an LLM for generating proposals (instead of deterministic stubs):
+
+```bash
+# Set your Gemini API key
+export GEMINI_API_KEY="your-api-key"
+
+# Run with LLM proposer
+delibera run --question "Should we adopt uv?" --use-llm-proposer --auto-approve-gates
+
+# Specify model and parameters
+delibera run --question "Your question" \
+  --use-llm-proposer \
+  --llm-model gemini-1.5-pro \
+  --llm-temperature 0.3 \
+  --auto-approve-gates
+```
+
+**Note:** LLM mode requires the `google-generativeai` package. Install with:
+```bash
+pip install delibera[llm]
+```
+
+Replay and inspection work identically whether the run used LLM or stubs - replay never re-invokes the LLM.
+
+### Inspect a Run
+
+```bash
+# Print a human-readable summary
+delibera inspect --run-id <run_id>
+
+# Generate a Markdown report
+delibera report --run-id <run_id> --out report.md
+```
+
+### Replay a Run
+
+```bash
+# Validate trace and artifact consistency
+delibera replay --run-id <run_id>
+```
+
+### Run Evaluation Suites
+
+```bash
+# Run an evaluation suite
+delibera eval --suite suites/basic.yaml
+
+# Save results to JSON
+delibera eval --suite suites/basic.yaml --save-results results.json
+```
+
+## Example Protocol
+
+```yaml
+name: simple_protocol
+protocol_version: v1
+max_depth: 1
+gates_enabled: true
+
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+  - id: research
+    kind: work
+    step_name: RESEARCH
+    role: researcher
+
+  - id: validate
+    kind: validate
+    step_name: CLAIM_CHECK
+
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+reduce:
+  rule: merge_artifacts
+
+convergence:
+  max_rounds: 0
+```
+
+## What Delibera Is Not
+
+- **Not an agent framework** — Delibera is not LangChain, CrewAI, or AutoGPT. It's a deliberation engine with strict governance.
+- **Not a workflow orchestrator** — Delibera is not Airflow or Prefect. It's specifically for reasoning processes that require epistemic tracking.
+- **Not autonomous** — Delibera does not "decide for you". It produces structured decision artifacts for humans to review.
+- **Not a chatbot** — Outputs are artifacts, not conversations.
+
+## Documentation
+
+See the [docs/](docs/README.md) directory for detailed documentation:
+
+- [Vision](docs/vision.md) — Why Delibera exists
+- [Architecture](docs/architecture.md) — System structure and invariants
+- [Formalism](docs/formalism.md) — Formal model and terminology
+- [Protocols](docs/protocol.md) — Protocol specification
+- [Epistemics](docs/epistemics.md) — Claims, evidence, and validation
+- [Tooling and Policy](docs/tooling-and-policy.md) — Tool access governance
+- [User Gates](docs/user-gates.md) — Human-in-the-loop checkpoints
+- [Tracing and Replay](docs/tracing-and-replay.md) — Audit and replay
 
 ## Development
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management and requires Python 3.12 or later.
-
-### Setup
-
 ```bash
-# Install dependencies
+# Install dev dependencies
 uv sync
 
-# Install pre-commit hooks
-uv run pre-commit install
-```
-
-### Running Tests
-
-```bash
 # Run tests
 uv run pytest
 
-# Run tests with coverage
-uv run pytest --cov=delibera
-```
-
-### Code Quality
-
-```bash
-# Run linter
-uv run ruff check .
-
-# Auto-fix linting issues
-uv run ruff check --fix .
-
-# Format code
-uv run ruff format .
-
 # Type checking
-uv run mypy src
+uv run mypy src/
 
-# Run all pre-commit hooks
-uv run pre-commit run --all-files
+# Linting
+uv run ruff check src/ tests/
 ```
 
-## Publishing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor guidelines.
 
-This project uses GitHub Actions for automated releases to PyPI using trusted publishing.
+## Roadmap
 
-### Setup Trusted Publishing
-
-Before creating a release, you need to configure trusted publishers on PyPI:
-
-1. Go to https://pypi.org/manage/account/publishing/
-2. Add a new pending publisher with:
-   - PyPI Project Name: `delibera`
-   - Owner: `forge-labs-dev`
-   - Repository name: `delibera`
-   - Workflow name: `publish.yml`
-   - Environment name: `pypi`
-
-3. For TestPyPI, go to https://test.pypi.org/manage/account/publishing/ and repeat with environment name `testpypi`
-
-### Creating a Release
-
-```bash
-# Tag a new version
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The GitHub Actions workflow will automatically:
-1. Build the distribution packages
-2. Publish to TestPyPI
-3. Publish to PyPI (requires manual approval in GitHub)
+- **v0.1** (current) — Core engine, protocols, epistemics, replay, evaluation
+- **v0.2** — Strata integration for artifact persistence and lineage tracking
+- **v0.3** — Remote tool execution with policy sandboxing
+- **v1.0** — Production hardening, performance optimization
 
 ## License
 

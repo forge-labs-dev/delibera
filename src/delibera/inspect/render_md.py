@@ -1,0 +1,235 @@
+"""Render RunSummary to Markdown format.
+
+This renderer produces a deterministic Markdown document suitable
+for documentation, reports, and version control.
+"""
+
+from typing import Any
+
+from delibera.inspect.summarize import NodeSummary, RunSummary
+
+
+def render_markdown(summary: RunSummary) -> str:
+    """Render a RunSummary to Markdown format.
+
+    Args:
+        summary: The RunSummary to render.
+
+    Returns:
+        Markdown document as a string.
+    """
+    lines: list[str] = []
+
+    # Title
+    lines.append(f"# Deliberation Report: {summary.run_id}")
+    lines.append("")
+
+    # Metadata table
+    lines.append("## Overview")
+    lines.append("")
+    lines.append("| Field | Value |")
+    lines.append("|-------|-------|")
+    lines.append(f"| Run ID | `{summary.run_id}` |")
+    lines.append(f"| Created | {summary.created_at} |")
+    lines.append(f"| Question | {_escape_md(summary.question)} |")
+    if summary.protocol.name:
+        lines.append(f"| Protocol | {summary.protocol.name} v{summary.protocol.version} |")
+    if summary.confidence > 0:
+        lines.append(f"| Confidence | {summary.confidence:.1%} |")
+    lines.append("")
+
+    # Final Recommendation
+    lines.append("## Final Recommendation")
+    lines.append("")
+    if summary.recommendation:
+        lines.append(f"> {_escape_md(summary.recommendation)}")
+    else:
+        lines.append("*No recommendation available.*")
+    lines.append("")
+
+    # Decision Explanation
+    if summary.decision_explanation:
+        lines.append("## Decision Explanation")
+        lines.append("")
+        _render_decision_explanation_md(lines, summary.decision_explanation)
+        lines.append("")
+
+    # Selected Path
+    lines.append("## Selected Path")
+    lines.append("")
+    if summary.selected_path:
+        lines.append("The following nodes were selected in the final decision:")
+        lines.append("")
+        for node in summary.selected_path:
+            _render_node_summary_md(lines, node)
+    else:
+        lines.append("*No path information available.*")
+    lines.append("")
+
+    # Key Claims
+    if summary.key_claims:
+        lines.append("## Key Claims")
+        lines.append("")
+        for claim in summary.key_claims:
+            status_badge = _status_badge(claim.status)
+            lines.append(f"### {claim.claim_type.capitalize()}: {_escape_md(claim.text)}")
+            lines.append("")
+            lines.append(f"**Status:** {status_badge}")
+            lines.append("")
+            if claim.citations:
+                lines.append("**Citations:**")
+                lines.append("")
+                for cit in claim.citations:
+                    lines.append(f"- **{cit.source}**")
+                    if cit.excerpt:
+                        if len(cit.excerpt) > 150:
+                            excerpt = cit.excerpt[:150] + "..."
+                        else:
+                            excerpt = cit.excerpt
+                        lines.append(f"  > {_escape_md(excerpt)}")
+                lines.append("")
+
+    # Pruning History
+    if summary.prune_events:
+        lines.append("## Pruning History")
+        lines.append("")
+        for i, prune in enumerate(summary.prune_events, 1):
+            lines.append(f"### Prune #{i}")
+            lines.append("")
+            lines.append(f"- **Kept:** {', '.join(prune.kept) or '(none)'}")
+            lines.append(f"- **Pruned:** {', '.join(prune.pruned) or '(none)'}")
+            if prune.reason:
+                lines.append(f"- **Reason:** {prune.reason}")
+            lines.append("")
+
+    # Convergence
+    if summary.refinement.stop_reason:
+        lines.append("## Convergence")
+        lines.append("")
+        lines.append(f"- **Stop reason:** {summary.refinement.stop_reason}")
+        if summary.refinement.rounds_run > 0:
+            lines.append(
+                f"- **Rounds:** {summary.refinement.rounds_run} / {summary.refinement.max_rounds}"
+            )
+        lines.append("")
+
+    # Statistics
+    lines.append("## Statistics")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Total nodes | {summary.total_nodes} |")
+    lines.append(f"| Tool calls | {summary.total_tool_calls} |")
+    lines.append(f"| Evidence items | {summary.total_evidence} |")
+    lines.append("")
+
+    # Errors and Warnings
+    if summary.errors or summary.warnings:
+        lines.append("## Issues")
+        lines.append("")
+        if summary.errors:
+            lines.append("### Errors")
+            lines.append("")
+            for error in summary.errors:
+                lines.append(f"- {_escape_md(error)}")
+            lines.append("")
+        if summary.warnings:
+            lines.append("### Warnings")
+            lines.append("")
+            for warning in summary.warnings:
+                lines.append(f"- {_escape_md(warning)}")
+            lines.append("")
+
+    # Footer
+    lines.append("---")
+    lines.append("")
+    lines.append("*Generated by Delibera*")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _escape_md(text: str) -> str:
+    """Escape special Markdown characters in text."""
+    # Escape pipe characters for tables
+    text = text.replace("|", "\\|")
+    # Escape newlines
+    text = text.replace("\n", " ")
+    return text
+
+
+def _status_badge(status: str) -> str:
+    """Return a badge-like indicator for claim status."""
+    badges = {
+        "supported": "Supported",
+        "weak": "Weak",
+        "unsupported": "Unsupported",
+    }
+    return badges.get(status.lower(), status)
+
+
+def _render_node_summary_md(lines: list[str], node: NodeSummary) -> None:
+    """Render a single node summary in Markdown."""
+    # Node header
+    label = node.label or f"({node.kind})"
+
+    lines.append(f"### {node.kind.capitalize()}: {label}")
+    lines.append("")
+
+    # Details list
+    if node.score is not None:
+        lines.append(f"- **Score:** {node.score:.2f}")
+
+    if node.claim_counts:
+        supported = node.claim_counts.get("supported", 0)
+        weak = node.claim_counts.get("weak", 0)
+        unsupported = node.claim_counts.get("unsupported", 0)
+        lines.append(f"- **Claims:** {supported} supported, {weak} weak, {unsupported} unsupported")
+
+    if node.evidence_count > 0:
+        lines.append(f"- **Evidence:** {node.evidence_count} items")
+        if node.evidence_sources:
+            sources_str = ", ".join(f"`{s}`" for s in node.evidence_sources[:3])
+            if len(node.evidence_sources) > 3:
+                sources_str += f" (+{len(node.evidence_sources) - 3} more)"
+            lines.append(f"  - Sources: {sources_str}")
+
+    obj = node.objections
+    total_blocking = obj.blocking_open + obj.blocking_accepted
+    total_nonblocking = obj.nonblocking_open + obj.nonblocking_accepted
+    if total_blocking > 0 or total_nonblocking > 0:
+        lines.append(
+            f"- **Objections:** "
+            f"{obj.blocking_accepted}/{total_blocking} blocking, "
+            f"{obj.nonblocking_accepted}/{total_nonblocking} nonblocking"
+        )
+
+    lines.append("")
+
+
+def _render_decision_explanation_md(lines: list[str], explanation: dict[str, Any]) -> None:
+    """Render decision explanation in Markdown."""
+    # Ranking table
+    ranking = explanation.get("ranking", [])
+    if ranking:
+        lines.append("### Ranking")
+        lines.append("")
+        lines.append("| Score | Option | Status |")
+        lines.append("|-------|--------|--------|")
+        for entry in ranking:
+            label = entry.get("label", "Unknown")
+            score = entry.get("score", 0.0)
+            status = entry.get("status", "")
+            lines.append(f"| {score:.2f} | {_escape_md(label)} | {status} |")
+        lines.append("")
+
+    # Weights table
+    weights = explanation.get("weights_used", {})
+    if weights:
+        lines.append("### Scoring Weights")
+        lines.append("")
+        lines.append("| Weight | Value |")
+        lines.append("|--------|-------|")
+        for key, value in sorted(weights.items()):
+            lines.append(f"| {key} | {value:.2f} |")
+        lines.append("")

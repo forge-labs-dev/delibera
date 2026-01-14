@@ -165,10 +165,10 @@ class SubplannerStub:
 
 
 class ResearcherStub:
-    """Stub researcher that collects evidence via docs.read tool.
+    """Stub researcher that collects evidence via docs.search + docs.read tools.
 
-    Deterministically reads from evidence/uv_notes.txt and extracts
-    an excerpt based on the option label.
+    Uses docs.search to discover relevant files within the evidence pack,
+    then docs.read to extract content from top results.
 
     Evidence is returned in a structured format for the engine to
     merge into the node ledger.
@@ -181,8 +181,8 @@ class ResearcherStub:
         "C": "reproducible",  # Will find "reproducible uv.lock"
     }
 
-    # Default evidence file
-    _EVIDENCE_FILE = "evidence/uv_notes.txt"
+    # Maximum number of search results to read
+    _MAX_READ_RESULTS = 2
 
     def execute(
         self,
@@ -191,14 +191,17 @@ class ResearcherStub:
     ) -> dict[str, Any]:
         """Collect evidence for a branch.
 
+        Uses docs.search to find relevant files, then docs.read to get content.
+
         Args:
             context: Must contain "label" key with branch label.
-            tool: Tool callback for docs.read.
+            tool: Tool callback for docs.search and docs.read.
 
         Returns:
             Dict with evidence items and notes.
         """
         label = context.get("label", "")
+        question = context.get("question", "")
 
         # Extract option letter
         option_letter = "A"  # default
@@ -207,39 +210,78 @@ class ResearcherStub:
                 option_letter = letter
                 break
 
-        # Get search term for this option
-        search_term = self._SEARCH_TERMS.get(option_letter, "fast")
+        # Build search query from option-specific term + first keywords from label/question
+        base_term = self._SEARCH_TERMS.get(option_letter, "fast")
+        search_query = self._build_search_query(base_term, label, question)
 
         evidence_items: list[dict[str, Any]] = []
         notes: list[str] = []
 
         if tool is not None:
+            # Step 1: Search for relevant files
             try:
-                # Read the evidence file
-                result = tool("docs.read", {"path": self._EVIDENCE_FILE})
-                text = result.get("text", "")
+                search_result = tool(
+                    "docs.search",
+                    {"query": search_query, "max_results": self._MAX_READ_RESULTS},
+                )
+                search_hits = search_result.get("results", [])
+                notes.append(f"docs.search found {len(search_hits)} results for '{search_query}'")
 
-                # Extract an excerpt containing the search term
-                excerpt = self._extract_excerpt(text, search_term)
+            except (KeyError, ToolDenied, ToolExecutionError) as e:
+                # docs.search not available, fall back to direct read
+                notes.append(f"docs.search failed ({e}), falling back to direct read")
+                search_hits = []
 
-                if excerpt:
-                    evidence_items.append(
-                        {
-                            "source": self._EVIDENCE_FILE,
-                            "excerpt": excerpt,
-                        }
-                    )
-                    notes.append(f"Found evidence for '{search_term}' in {self._EVIDENCE_FILE}")
-                else:
-                    notes.append(f"No excerpt found for '{search_term}'")
+            # Step 2: Read top results and extract evidence
+            if search_hits:
+                for hit in search_hits[: self._MAX_READ_RESULTS]:
+                    path = hit.get("path", "")
+                    snippet = hit.get("snippet", "")
 
-            except (KeyError, ValueError, OSError, ToolDenied, ToolExecutionError) as e:
-                # KeyError: tool not registered
-                # ValueError: invalid input
-                # OSError: file read error
-                # ToolDenied: policy denied tool access
-                # ToolExecutionError: tool execution failed
-                notes.append(f"Failed to read evidence: {e}")
+                    if not path:
+                        continue
+
+                    try:
+                        read_result = tool("docs.read", {"path": path})
+                        text = read_result.get("text", "")
+
+                        # Extract excerpt around the search term
+                        excerpt = self._extract_excerpt(text, base_term)
+                        if not excerpt and snippet:
+                            # Use snippet from search if no excerpt found
+                            excerpt = snippet
+
+                        if excerpt:
+                            evidence_items.append(
+                                {
+                                    "source": path,
+                                    "excerpt": excerpt,
+                                }
+                            )
+                            notes.append(f"Found evidence in {path}")
+
+                    except (KeyError, ToolDenied, ToolExecutionError) as e:
+                        notes.append(f"Failed to read {path}: {e}")
+
+            # Fallback: if no search hits, try reading a default file
+            if not search_hits and not evidence_items:
+                fallback_path = "uv_notes.txt"
+                try:
+                    read_result = tool("docs.read", {"path": fallback_path})
+                    text = read_result.get("text", "")
+
+                    excerpt = self._extract_excerpt(text, base_term)
+                    if excerpt:
+                        evidence_items.append(
+                            {
+                                "source": fallback_path,
+                                "excerpt": excerpt,
+                            }
+                        )
+                        notes.append(f"Fallback: found evidence in {fallback_path}")
+
+                except (KeyError, ToolDenied, ToolExecutionError) as e:
+                    notes.append(f"Fallback read failed: {e}")
         else:
             notes.append("No tool callback provided; skipping evidence collection")
 
@@ -249,6 +291,31 @@ class ResearcherStub:
             "role": "researcher",
             "step": "RESEARCH",
         }
+
+    def _build_search_query(self, base_term: str, _label: str, question: str) -> str:
+        """Build a search query from the base term and context.
+
+        Args:
+            base_term: The primary search term for this option.
+            _label: The branch label (unused, reserved for future use).
+            question: The original question.
+
+        Returns:
+            A search query string.
+        """
+        # Start with the base term
+        terms = [base_term]
+
+        # Add a keyword from question (first 3 words, skip common words)
+        skip_words = {"should", "we", "the", "a", "an", "is", "are", "what", "how", "why"}
+        words = question.lower().split()
+        for word in words[:6]:
+            clean = word.strip("?.,!\"'")
+            if clean and clean not in skip_words and len(clean) > 2:
+                terms.append(clean)
+                break
+
+        return " ".join(terms)
 
     def _extract_excerpt(self, text: str, search_term: str) -> str:
         """Extract an excerpt containing the search term.
@@ -289,6 +356,79 @@ class ResearcherStub:
                 excerpt = excerpt[:space_pos] + "..."
 
         return excerpt.strip()
+
+
+class RefinerStub:
+    """Stub refiner agent that deterministically improves artifacts.
+
+    Refines artifacts by:
+    1. Marking weak claims as "refined" in the text
+    2. Adding clarification notes for unsupported claims
+    3. Producing a deterministically improved artifact
+
+    This enables testing the refinement loop without LLM calls.
+    """
+
+    def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Refine an artifact based on validation feedback.
+
+        Args:
+            context: Must contain:
+                - "node_id": Node ID for deterministic output
+                - "artifact": The current artifact dict
+                - "claims": List of claim dicts with "status", "claim_id", "text"
+                - "round": Current refinement round number
+
+        Returns:
+            Dict with refined artifact and refinement notes.
+        """
+        node_id = context.get("node_id", "")  # noqa: F841
+        artifact = context.get("artifact", {})
+        claims = context.get("claims", [])
+        round_num = context.get("round", 1)
+
+        # Count claim categories
+        weak_claims = [c for c in claims if c.get("status") == "weak"]
+        unsupported_claims = [c for c in claims if c.get("status") == "unsupported"]
+
+        # Build refinement notes
+        refinement_notes: list[str] = []
+
+        # Deterministically "fix" weak claims
+        for claim in weak_claims[:2]:  # Fix up to 2 weak claims per round
+            claim_id = claim.get("claim_id", "unknown")
+            refinement_notes.append(f"Strengthened weak claim {claim_id} with additional context")
+
+        # Add clarification for unsupported claims
+        for claim in unsupported_claims[:1]:  # Address up to 1 unsupported claim per round
+            claim_id = claim.get("claim_id", "unknown")
+            refinement_notes.append(f"Added clarification for unsupported claim {claim_id}")
+
+        # Create refined artifact (shallow copy with updates)
+        refined_artifact = dict(artifact)
+
+        # Mark as refined
+        refined_artifact["refinement_round"] = round_num
+        refined_artifact["refinement_notes"] = refinement_notes
+
+        # Update summary to indicate refinement
+        original_summary = artifact.get("summary", "")
+        if original_summary:
+            refined_artifact["summary"] = f"{original_summary} [Refined in round {round_num}]"
+
+        # Deterministically improve score (diminishing returns)
+        original_score = artifact.get("score", 0.5)
+        improvement = 0.05 / round_num  # Smaller improvements each round
+        refined_artifact["score"] = min(1.0, original_score + improvement)
+
+        return {
+            "artifact": refined_artifact,
+            "refinement_notes": refinement_notes,
+            "weak_addressed": len(weak_claims[:2]),
+            "unsupported_addressed": len(unsupported_claims[:1]),
+            "role": "refiner",
+            "step": "REFINE",
+        }
 
 
 class RedTeamStub:
