@@ -1,0 +1,25 @@
+# Basic evaluation suite for Delibera
+# Run with: delibera eval --suite suites/basic.yaml
+
+suite_name: basic_decisions_v1
+
+cases:
+  - id: uv_adoption
+    question: "Should we adopt uv as our Python package manager?"
+    evidence_dir: ../evidence/
+    expected:
+      # At least some claims should be supported by evidence
+      min_supported_claims_count: 1
+      # Don't want too many unsupported claims
+      max_unsupported_claims_count: 5
+      # Run should complete successfully (not abort)
+      run_aborted: false
+
+  - id: simple_question
+    question: "What are the best practices for Python dependency management?"
+    evidence_dir: ../evidence/
+    expected:
+      # Generous constraints for general questions
+      min_supported_claims_count: 0
+      max_weak_claims_count: 100
+      run_aborted: false
