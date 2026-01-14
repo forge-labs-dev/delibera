@@ -74,6 +74,7 @@ class Engine:
         protocol_source: str | None = None,
         tie_threshold: float = DEFAULT_TIE_THRESHOLD,
         initial_weights: ScoreWeights | None = None,
+        evidence_root: Path | None = None,
     ) -> None:
         """Initialize the engine.
 
@@ -87,9 +88,10 @@ class Engine:
             protocol_source: Source of protocol ("builtin" or "yaml:<path>").
             tie_threshold: Score difference below which tradeoff gate triggers.
             initial_weights: Initial scoring weights. If provided, tradeoff gate skipped.
+            evidence_root: Root directory for evidence files. Defaults to ./evidence.
         """
         self.runs_dir = runs_dir or Path("runs")
-        self._tool_registry = tool_registry or create_default_registry()
+        self._tool_registry = tool_registry or create_default_registry(evidence_root=evidence_root)
         self._policy_engine = policy_engine or create_default_policy_engine()
         self._gate_handler = gate_handler or AutoApproveGateHandler()
         self._gates_enabled = gates_enabled

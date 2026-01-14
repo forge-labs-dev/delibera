@@ -97,8 +97,12 @@ class ToolRegistry:
         }
 
 
-def create_default_registry() -> ToolRegistry:
+def create_default_registry(evidence_root: Any = None) -> ToolRegistry:
     """Create a registry with default built-in tools.
+
+    Args:
+        evidence_root: Optional custom root directory for evidence files (Path or None).
+            If not provided, uses the default evidence/ directory.
 
     Returns:
         A ToolRegistry pre-populated with built-in tools.
@@ -108,5 +112,5 @@ def create_default_registry() -> ToolRegistry:
 
     registry = ToolRegistry()
     registry.register(CalculatorTool())
-    registry.register(DocsReadTool())
+    registry.register(DocsReadTool(evidence_root=evidence_root))
     return registry
