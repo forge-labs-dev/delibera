@@ -7,7 +7,7 @@ It does NOT execute operators directly; it returns instructions for the engine.
 from dataclasses import dataclass
 from typing import Any
 
-from delibera.protocol.spec import ExpandSpec, ProtocolSpec, StepSpec
+from delibera.protocol.spec import ConvergenceSpec, ExpandSpec, ProtocolSpec, StepSpec
 
 
 @dataclass
@@ -190,3 +190,41 @@ class ProtocolInterpreter:
             The max_depth from the protocol.
         """
         return self.spec.max_depth
+
+    def has_refine_loop(self) -> bool:
+        """Check if the protocol has a refinement loop.
+
+        Returns:
+            True if refine_loop is non-empty and max_rounds > 0.
+        """
+        return len(self.spec.refine_loop) > 0 and self.spec.convergence.max_rounds > 0
+
+    def get_refine_loop_steps(self) -> list[StepSpec]:
+        """Get the refinement loop steps.
+
+        Returns:
+            List of StepSpec for refinement.
+        """
+        return self.spec.refine_loop
+
+    def get_convergence_spec(self) -> ConvergenceSpec:
+        """Get the convergence specification.
+
+        Returns:
+            The ConvergenceSpec from the protocol.
+        """
+        return self.spec.convergence
+
+    def get_refine_step_by_id(self, step_id: str) -> StepSpec | None:
+        """Get a refinement step by ID.
+
+        Args:
+            step_id: The step ID to find.
+
+        Returns:
+            StepSpec if found in refine_loop, None otherwise.
+        """
+        for step in self.spec.refine_loop:
+            if step.id == step_id:
+                return step
+        return None

@@ -1,7 +1,7 @@
 """Tool specification and schema definitions.
 
 Defines the ToolSpec protocol that all tools must implement,
-and the RiskLevel enum for tool classification.
+and the RiskLevel and ToolCapability enums for tool classification.
 """
 
 from abc import abstractmethod
@@ -20,6 +20,21 @@ class RiskLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class ToolCapability(Enum):
+    """Capability classification for tools.
+
+    discovery: Tools that find/search for new information (e.g., docs.search)
+    inspect: Tools that read already-known sources (e.g., docs.read)
+    compute: Tools that perform computation without external data (e.g., calculator)
+
+    Discovery tools are denied during CLAIM_CHECK (evidence-local restriction).
+    """
+
+    DISCOVERY = "discovery"
+    INSPECT = "inspect"
+    COMPUTE = "compute"
 
 
 class ToolSpec(Protocol):
@@ -42,13 +57,23 @@ class ToolSpec(Protocol):
         ...
 
     @property
+    def capability(self) -> ToolCapability:
+        """Capability classification of this tool.
+
+        Defaults to COMPUTE. Override in subclasses.
+        """
+        return ToolCapability.COMPUTE
+
+    @property
     def is_discovery(self) -> bool:
         """Whether this tool discovers new information.
 
         Discovery tools are denied during CLAIM_CHECK step
         to enforce evidence-local restriction.
+
+        This is derived from capability for backwards compatibility.
         """
-        return False
+        return self.capability == ToolCapability.DISCOVERY
 
     def validate_input(self, tool_input: dict[str, Any]) -> None:
         """Validate the input before execution.

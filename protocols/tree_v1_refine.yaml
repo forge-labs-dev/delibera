@@ -1,0 +1,72 @@
+# Delibera Tree Protocol v1 with Refinement
+#
+# This protocol extends tree_v1 with a bounded refinement loop that
+# iteratively improves the merged artifact until convergence predicates
+# are satisfied or max_rounds is reached.
+
+name: tree_protocol_v1_refine
+protocol_version: v1
+max_depth: 1
+gates_enabled: true
+
+# Expansion rules define where and how the tree grows
+expand_rules:
+  - id: expand_options
+    at_step_id: plan
+    child_kind: option
+    max_children: 3
+    depth: 1
+    source: planner_output
+
+# Branch pipeline: steps executed for each node after expansion
+branch_pipeline:
+  - id: propose
+    kind: work
+    step_name: PROPOSE
+    role: proposer
+
+  - id: research
+    kind: work
+    step_name: RESEARCH
+    role: researcher
+
+  - id: validate
+    kind: validate
+    step_name: CLAIM_CHECK
+
+  - id: redteam
+    kind: work
+    step_name: REDTEAM
+    role: redteam
+
+# Refinement loop: steps executed iteratively on merged artifact
+# Each round executes: REFINE -> VALIDATE until convergence or max_rounds
+refine_loop:
+  - id: refine
+    kind: work
+    step_name: REFINE
+    role: refiner
+
+  - id: revalidate
+    kind: validate
+    step_name: CLAIM_CHECK
+
+# Pruning configuration
+prune:
+  rule: epistemic_then_score
+  keep_k: 2
+
+# Reduction configuration
+reduce:
+  rule: merge_artifacts
+
+# Convergence settings
+# Refinement continues until ALL predicates are satisfied OR max_rounds reached:
+#   1. no_blocking_objections: No open blocking objections remain
+#   2. unsupported_claims == 0: All claims are supported or weak
+#   3. weak_claims <= weak_threshold: Number of weak claims is acceptable
+#   4. score_improvement < score_epsilon: Score delta is minimal (converged)
+convergence:
+  max_rounds: 3        # Maximum refinement iterations
+  weak_threshold: 5    # Maximum acceptable weak claims for convergence
+  score_epsilon: 0.01  # Minimum score improvement to continue refining

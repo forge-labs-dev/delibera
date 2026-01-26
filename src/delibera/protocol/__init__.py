@@ -30,6 +30,7 @@ from delibera.protocol.spec import (
     ReduceSpec,
     StepSpec,
     validate_protocol,
+    warnings_for_protocol,
 )
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "ReduceSpec",
     "ConvergenceSpec",
     "validate_protocol",
+    "warnings_for_protocol",
     # Defaults
     "DEFAULT_PROTOCOL",
     "create_simple_protocol",

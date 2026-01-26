@@ -1,5 +1,6 @@
 """Delibera - An engine for decision-grade AI deliberation."""
 
+from delibera import __version__
 from delibera.engine.orchestrator import Engine
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree, Node

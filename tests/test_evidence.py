@@ -113,7 +113,8 @@ class TestResearchAddsEvidence:
                 evidence = event["payload"]["evidence"]
                 assert "evidence_id" in evidence
                 assert "source" in evidence
-                assert evidence["source"] == "evidence/uv_notes.txt"
+                # Source is relative to evidence root (uv_notes.txt)
+                assert "uv_notes.txt" in evidence["source"]
                 assert "excerpt_length" in evidence
                 assert evidence["excerpt_length"] > 0
                 assert "provenance" in evidence

@@ -4,16 +4,33 @@ The engine is the central control loop that owns the deliberation tree,
 applies operators, enforces protocols, and determines convergence.
 """
 
+from __future__ import annotations
+
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from delibera.agents.stub import PlannerStub, ProposerStub, RedTeamStub, ResearcherStub
+from delibera.agents.stub import (
+    PlannerStub,
+    ProposerStub,
+    RedTeamStub,
+    RefinerStub,
+    ResearcherStub,
+)
+
+if TYPE_CHECKING:
+    from delibera.llm.base import LLMClient
 from delibera.engine import operators
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
-from delibera.epistemics.models import Evidence, Objection, ObjectionSeverity, ObjectionStatus
+from delibera.epistemics.models import (
+    ClaimStatus,
+    Evidence,
+    Objection,
+    ObjectionSeverity,
+    ObjectionStatus,
+)
 from delibera.gates import (
     GATE_ALLOWED_ACTIONS,
     AutoApproveGateHandler,
@@ -75,6 +92,11 @@ class Engine:
         tie_threshold: float = DEFAULT_TIE_THRESHOLD,
         initial_weights: ScoreWeights | None = None,
         evidence_root: Path | None = None,
+        llm_client: LLMClient | None = None,
+        use_llm_proposer: bool = False,
+        llm_model: str | None = None,
+        llm_temperature: float = 0.2,
+        llm_max_output_tokens: int = 800,
     ) -> None:
         """Initialize the engine.
 
@@ -89,6 +111,11 @@ class Engine:
             tie_threshold: Score difference below which tradeoff gate triggers.
             initial_weights: Initial scoring weights. If provided, tradeoff gate skipped.
             evidence_root: Root directory for evidence files. Defaults to ./evidence.
+            llm_client: Optional LLM client for LLM-backed agents.
+            use_llm_proposer: Whether to use LLM-backed proposer. Defaults to False.
+            llm_model: Model name for LLM (if different from client default).
+            llm_temperature: Temperature for LLM calls. Defaults to 0.2.
+            llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry(evidence_root=evidence_root)
@@ -99,6 +126,13 @@ class Engine:
         self._protocol_source = protocol_source or "builtin"
         self._tie_threshold = tie_threshold
         self._initial_weights = initial_weights
+
+        # LLM configuration
+        self._llm_client = llm_client
+        self._use_llm_proposer = use_llm_proposer
+        self._llm_model = llm_model
+        self._llm_temperature = llm_temperature
+        self._llm_max_output_tokens = llm_max_output_tokens
 
         # These are set during run execution
         self._current_run_id: str = ""
@@ -236,7 +270,19 @@ class Engine:
                 )
 
             # PROPOSE: Generate proposals for each branch
-            proposer = ProposerStub()
+            proposer: ProposerStub | Any  # Allow LLM proposer
+            if self._use_llm_proposer and self._llm_client is not None:
+                from delibera.agents.llm_proposer import ProposerLLM
+
+                proposer = ProposerLLM(
+                    llm_client=self._llm_client,
+                    model=self._llm_model,
+                    temperature=self._llm_temperature,
+                    max_output_tokens=self._llm_max_output_tokens,
+                )
+            else:
+                proposer = ProposerStub()
+
             for child in children:
                 # Create tool callback for this step
                 tool_callback = self.make_tool_callback(
@@ -244,10 +290,74 @@ class Engine:
                     role="proposer",
                     step="PROPOSE",
                 )
-                propose_output = proposer.execute(
-                    {"label": child.label, "question": question},
-                    tool=tool_callback,
-                )
+
+                # Emit LLM trace events if using LLM proposer
+                if self._use_llm_proposer and self._llm_client is not None:
+                    # Build context with node_id for tracing
+                    context = {
+                        "label": child.label,
+                        "question": question,
+                        "node_id": child.node_id,
+                    }
+
+                    # Emit llm_call_requested before the call
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_requested",
+                            run_id=run_id,
+                            payload={
+                                "node_id": child.node_id,
+                                "role": "proposer",
+                                "step": "PROPOSE",
+                                "provider": "gemini",
+                                "model": self._llm_model or "default",
+                            },
+                        )
+                    )
+
+                    try:
+                        propose_output = proposer.execute(context, tool=tool_callback)
+
+                        # Emit llm_call_succeeded
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_succeeded",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "proposer",
+                                    "step": "PROPOSE",
+                                    "output_length": len(str(propose_output)),
+                                    "llm_generated": True,
+                                },
+                            )
+                        )
+                    except Exception as e:
+                        # Emit llm_call_failed and fall back to stub
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_failed",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "proposer",
+                                    "step": "PROPOSE",
+                                    "error_type": type(e).__name__,
+                                    "error_message": str(e)[:200],
+                                },
+                            )
+                        )
+                        # Fall back to stub
+                        propose_output = ProposerStub().execute(
+                            {"label": child.label, "question": question},
+                            tool=tool_callback,
+                        )
+                else:
+                    propose_output = proposer.execute(
+                        {"label": child.label, "question": question},
+                        tool=tool_callback,
+                    )
+
                 tree.update_artifact(child.node_id, propose_output)
 
                 writer.emit(
@@ -452,8 +562,21 @@ class Engine:
                 )
             )
 
+            # REFINE LOOP: Execute bounded refinement if protocol defines it
+            refinement_metadata = self._execute_refine_loop(
+                merged_node=merged_node,
+                tree=tree,
+                run_id=run_id,
+                writer=writer,
+                current_weights=current_weights,
+            )
+
             # Build artifact for sign-off
             artifact = operators.finalize(state, merged_node)
+
+            # Add refinement metadata to artifact if refinement occurred
+            if refinement_metadata["total_rounds"] > 0:
+                artifact["refinement"] = refinement_metadata
 
             # FINAL SIGN-OFF GATE: Get user approval for final output
             if needs_final_signoff_gate(artifact, self._gates_enabled):
@@ -1007,3 +1130,268 @@ class Engine:
                     },
                 )
             )
+
+    def _execute_refine_loop(
+        self,
+        merged_node: Any,
+        tree: DeliberationTree,
+        run_id: str,
+        writer: TraceWriter,
+        current_weights: ScoreWeights,
+    ) -> dict[str, Any]:
+        """Execute the bounded refinement loop on the merged node.
+
+        Refinement continues until:
+        1. max_rounds is reached
+        2. All convergence predicates are satisfied:
+           - no_blocking_objections: No open blocking objections
+           - unsupported_claims == 0
+           - weak_claims <= weak_threshold
+           - score_improvement < score_epsilon
+
+        Args:
+            merged_node: The merged node to refine.
+            tree: The deliberation tree.
+            run_id: The current run ID.
+            writer: The trace writer.
+            current_weights: The current scoring weights.
+
+        Returns:
+            Refinement metadata dict with total_rounds, converged, stop_reason, history.
+        """
+        assert self._interpreter is not None  # Set during run()
+
+        # Check if refinement is enabled
+        if not self._interpreter.has_refine_loop():
+            return {
+                "total_rounds": 0,
+                "converged": False,
+                "stop_reason": "refinement_disabled",
+                "history": [],
+            }
+
+        convergence_spec = self._interpreter.get_convergence_spec()
+        max_rounds = convergence_spec.max_rounds
+        weak_threshold = convergence_spec.weak_threshold
+        score_epsilon = convergence_spec.score_epsilon
+
+        history: list[dict[str, Any]] = []
+        previous_score = merged_node.artifact.get("score", 0.0)
+        converged = False
+        stop_reason = "max_rounds_reached"
+
+        refiner = RefinerStub()
+
+        for round_num in range(1, max_rounds + 1):
+            # Emit round started event
+            writer.emit(
+                TraceEvent(
+                    event_type="refinement_round_started",
+                    run_id=run_id,
+                    payload={
+                        "round": round_num,
+                        "node_id": merged_node.node_id,
+                        "max_rounds": max_rounds,
+                    },
+                )
+            )
+
+            # Check convergence predicates before refining
+            converged, stop_reason = self._check_convergence(
+                merged_node=merged_node,
+                weak_threshold=weak_threshold,
+                score_epsilon=score_epsilon,
+                previous_score=previous_score,
+                current_score=merged_node.artifact.get("score", 0.0),
+            )
+
+            if converged:
+                # Record early convergence
+                history.append(
+                    {
+                        "round": round_num,
+                        "action": "converged_early",
+                        "reason": stop_reason,
+                    }
+                )
+                writer.emit(
+                    TraceEvent(
+                        event_type="refinement_round_completed",
+                        run_id=run_id,
+                        payload={
+                            "round": round_num,
+                            "node_id": merged_node.node_id,
+                            "converged": True,
+                            "stop_reason": stop_reason,
+                        },
+                    )
+                )
+                break
+
+            # Build claims summary for refiner
+            claims_summary = [
+                {
+                    "claim_id": c.claim_id,
+                    "claim_type": c.claim_type.value,
+                    "status": c.status.value,
+                    "text": c.text,
+                }
+                for c in merged_node.ledger.claims
+            ]
+
+            # Execute refiner
+            refine_output = refiner.execute(
+                {
+                    "node_id": merged_node.node_id,
+                    "artifact": merged_node.artifact,
+                    "claims": claims_summary,
+                    "round": round_num,
+                }
+            )
+
+            # Update artifact with refined version
+            refined_artifact = refine_output.get("artifact", merged_node.artifact)
+            tree.update_artifact(merged_node.node_id, refined_artifact)
+
+            # Emit work output for refine step
+            writer.emit(
+                TraceEvent(
+                    event_type="work_output",
+                    run_id=run_id,
+                    payload={
+                        "step": "REFINE",
+                        "node_id": merged_node.node_id,
+                        "role": "refiner",
+                        "round": round_num,
+                        "output": refine_output,
+                    },
+                )
+            )
+
+            # Re-validate claims after refinement
+            report = operators.validate(tree, merged_node.node_id, "refiner")
+            writer.emit(
+                TraceEvent(
+                    event_type="claim_validation_report",
+                    run_id=run_id,
+                    payload={
+                        "node_id": merged_node.node_id,
+                        "round": round_num,
+                        "supported": report.supported,
+                        "weak": report.weak,
+                        "unsupported": report.unsupported,
+                        "details": report.details,
+                        "support_relations": report.support_relations,
+                    },
+                )
+            )
+
+            # Rescore after refinement
+            score_result = score_node(merged_node, current_weights)
+            new_score = score_result.score
+            score_delta = new_score - previous_score
+
+            # Record round history
+            round_record = {
+                "round": round_num,
+                "weak_addressed": refine_output.get("weak_addressed", 0),
+                "unsupported_addressed": refine_output.get("unsupported_addressed", 0),
+                "previous_score": previous_score,
+                "new_score": new_score,
+                "score_delta": score_delta,
+                "weak_claims": report.weak,
+                "unsupported_claims": report.unsupported,
+            }
+            history.append(round_record)
+
+            # Emit round completed event
+            writer.emit(
+                TraceEvent(
+                    event_type="refinement_round_completed",
+                    run_id=run_id,
+                    payload={
+                        "round": round_num,
+                        "node_id": merged_node.node_id,
+                        "converged": False,
+                        "score_delta": score_delta,
+                        "weak_claims": report.weak,
+                        "unsupported_claims": report.unsupported,
+                    },
+                )
+            )
+
+            previous_score = new_score
+
+        # Final convergence check
+        if not converged:
+            converged, stop_reason = self._check_convergence(
+                merged_node=merged_node,
+                weak_threshold=weak_threshold,
+                score_epsilon=score_epsilon,
+                previous_score=previous_score,
+                current_score=merged_node.artifact.get("score", 0.0),
+            )
+            if not converged:
+                stop_reason = "max_rounds_reached"
+
+        return {
+            "total_rounds": len(history),
+            "converged": converged,
+            "stop_reason": stop_reason,
+            "history": history,
+        }
+
+    def _check_convergence(
+        self,
+        merged_node: Any,
+        weak_threshold: int,
+        score_epsilon: float,
+        previous_score: float,
+        current_score: float,
+    ) -> tuple[bool, str]:
+        """Check if convergence predicates are satisfied.
+
+        Predicates (all must be True):
+        1. no_blocking_objections: No open blocking objections
+        2. unsupported_claims == 0
+        3. weak_claims <= weak_threshold
+        4. score_improvement < score_epsilon
+
+        Args:
+            merged_node: The node to check.
+            weak_threshold: Maximum acceptable weak claims.
+            score_epsilon: Minimum score improvement to continue.
+            previous_score: Score before last refinement.
+            current_score: Score after last refinement.
+
+        Returns:
+            Tuple of (converged, reason) where reason explains which predicate failed.
+        """
+        # Check for open blocking objections
+        blocking_open = sum(
+            1
+            for obj in merged_node.ledger.objections
+            if obj.severity == ObjectionSeverity.BLOCKING and obj.status == ObjectionStatus.OPEN
+        )
+        if blocking_open > 0:
+            return False, "blocking_objections_remain"
+
+        # Count claim statuses
+        unsupported = sum(
+            1 for c in merged_node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
+        )
+        weak = sum(1 for c in merged_node.ledger.claims if c.status == ClaimStatus.WEAK)
+
+        if unsupported > 0:
+            return False, "unsupported_claims_remain"
+
+        if weak > weak_threshold:
+            return False, "weak_claims_exceed_threshold"
+
+        # Check score improvement (if scores are close, we've converged)
+        score_delta = abs(current_score - previous_score)
+        if score_delta >= score_epsilon:
+            return False, "score_still_improving"
+
+        # All predicates satisfied
+        return True, "all_predicates_satisfied"

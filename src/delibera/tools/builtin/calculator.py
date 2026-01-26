@@ -9,7 +9,7 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
-from delibera.tools.spec import RiskLevel, ToolExecutionError
+from delibera.tools.spec import RiskLevel, ToolCapability, ToolExecutionError
 
 # Type aliases for operator functions
 BinaryOpFunc = Callable[[float | int, float | int], float | int]
@@ -55,9 +55,14 @@ class CalculatorTool:
         return RiskLevel.LOW
 
     @property
+    def capability(self) -> ToolCapability:
+        """Calculator is a compute tool."""
+        return ToolCapability.COMPUTE
+
+    @property
     def is_discovery(self) -> bool:
-        """Calculator does not discover new information."""
-        return False
+        """Whether this tool discovers new information."""
+        return self.capability == ToolCapability.DISCOVERY
 
     def validate_input(self, tool_input: dict[str, Any]) -> None:
         """Validate the input before execution.
