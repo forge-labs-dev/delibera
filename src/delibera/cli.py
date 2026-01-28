@@ -246,7 +246,7 @@ def run(
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error: Unexpected failure during run: {e}", err=True)
-        click.echo("Check that ANTHROPIC_API_KEY is set and valid.", err=True)
+        click.echo("Check your configuration and API keys.", err=True)
         sys.exit(1)
 
 

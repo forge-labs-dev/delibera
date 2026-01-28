@@ -199,7 +199,7 @@ def _extract_protocol_info(summary: RunSummary, events: list[dict[str, Any]]) ->
     for event in events:
         if event.get("event_type") == "run_start":
             payload = event.get("payload", {})
-            summary.protocol.name = payload.get("protocol", "")
+            summary.protocol.name = payload.get("protocol_name", "")
             summary.protocol.version = payload.get("protocol_version", "")
             summary.protocol.source = payload.get("protocol_source", "")
             break

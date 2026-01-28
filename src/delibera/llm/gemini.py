@@ -147,11 +147,15 @@ class GeminiClient:
         if request.response_format == "json":
             generation_config["response_mime_type"] = "application/json"
 
+        # Build content from messages (system prompt separated for SDK)
+        system_instruction, contents = self._build_contents(request)
+
         # Create the model
         try:
             genai_model = genai.GenerativeModel(
                 model_name=model,
                 generation_config=generation_config if generation_config else None,
+                system_instruction=system_instruction if system_instruction else None,
             )
         except Exception as e:
             raise LLMError(
@@ -159,9 +163,6 @@ class GeminiClient:
                 provider="gemini",
                 model=model,
             ) from e
-
-        # Build content from messages
-        contents = self._build_sdk_contents(request)
 
         # Generate
         try:
@@ -217,12 +218,16 @@ class GeminiClient:
         import urllib.error
         import urllib.request
 
-        # Build API URL
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self._api_key}"
+        # Build API URL (key passed via header, not query param, to avoid leaking in logs)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
         # Build request body
-        contents = self._build_http_contents(request)
+        system_instruction, contents = self._build_contents(request)
         body: dict[str, Any] = {"contents": contents}
+
+        # Add system instruction if present
+        if system_instruction:
+            body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
         # Add generation config
         generation_config: dict[str, Any] = {}
@@ -240,7 +245,10 @@ class GeminiClient:
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
             method="POST",
         )
 
@@ -315,64 +323,42 @@ class GeminiClient:
             usage=usage,
         )
 
-    def _build_sdk_contents(self, request: LLMRequest) -> list[Any]:
-        """Build SDK-compatible content list from messages.
+    def _build_contents(self, request: LLMRequest) -> tuple[str, list[dict[str, Any]]]:
+        """Build API-compatible content list from messages.
+
+        Separates system messages into a dedicated system instruction string
+        (used natively by both the SDK and HTTP API) and builds the
+        conversation content list from user/assistant messages.
 
         Args:
             request: The LLM request.
 
         Returns:
-            Content list for SDK.
+            Tuple of (system_instruction, contents) where system_instruction
+            is the concatenated system messages and contents is the
+            conversation turns.
         """
-        contents: list[Any] = []
-
-        # Combine system and user messages
-        combined_prompt = ""
-        for msg in request.messages:
-            if msg.role == "system":
-                combined_prompt += msg.content + "\n\n"
-            elif msg.role == "user":
-                combined_prompt += msg.content
-            elif msg.role == "assistant":
-                # For multi-turn, include assistant responses
-                if combined_prompt:
-                    contents.append({"role": "user", "parts": [{"text": combined_prompt}]})
-                    combined_prompt = ""
-                contents.append({"role": "model", "parts": [{"text": msg.content}]})
-
-        if combined_prompt:
-            contents.append({"role": "user", "parts": [{"text": combined_prompt}]})
-
-        return contents
-
-    def _build_http_contents(self, request: LLMRequest) -> list[dict[str, Any]]:
-        """Build HTTP API-compatible content list from messages.
-
-        Args:
-            request: The LLM request.
-
-        Returns:
-            Content list for HTTP API.
-        """
+        system_parts: list[str] = []
         contents: list[dict[str, Any]] = []
 
-        # Combine system and user messages
-        combined_prompt = ""
+        user_prompt = ""
         for msg in request.messages:
             if msg.role == "system":
-                combined_prompt += msg.content + "\n\n"
+                system_parts.append(msg.content)
             elif msg.role == "user":
-                combined_prompt += msg.content
+                user_prompt += msg.content
             elif msg.role == "assistant":
-                if combined_prompt:
-                    contents.append({"role": "user", "parts": [{"text": combined_prompt}]})
-                    combined_prompt = ""
+                # For multi-turn, flush user prompt before assistant response
+                if user_prompt:
+                    contents.append({"role": "user", "parts": [{"text": user_prompt}]})
+                    user_prompt = ""
                 contents.append({"role": "model", "parts": [{"text": msg.content}]})
 
-        if combined_prompt:
-            contents.append({"role": "user", "parts": [{"text": combined_prompt}]})
+        if user_prompt:
+            contents.append({"role": "user", "parts": [{"text": user_prompt}]})
 
-        return contents
+        system_instruction = "\n\n".join(system_parts)
+        return system_instruction, contents
 
     def _parse_json_response(self, text: str) -> dict[str, Any]:
         """Parse JSON from response text.
