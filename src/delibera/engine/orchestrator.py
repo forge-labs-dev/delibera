@@ -272,7 +272,10 @@ class Engine:
             # PROPOSE: Generate proposals for each branch
             proposer: ProposerStub | Any  # Allow LLM proposer
             if self._use_llm_proposer and self._llm_client is not None:
-                from delibera.agents.llm_proposer import ProposerLLM
+                from delibera.agents.llm_proposer import ProposerLLM, check_llm_allowed_in_step
+
+                # Runtime guard: LLM only allowed in work steps
+                check_llm_allowed_in_step("work")
 
                 proposer = ProposerLLM(
                     llm_client=self._llm_client,
@@ -334,6 +337,8 @@ class Engine:
                         )
                     except Exception as e:
                         # Emit llm_call_failed and fall back to stub
+                        from delibera.llm.redaction import redact_text
+
                         writer.emit(
                             TraceEvent(
                                 event_type="llm_call_failed",
@@ -343,7 +348,7 @@ class Engine:
                                     "role": "proposer",
                                     "step": "PROPOSE",
                                     "error_type": type(e).__name__,
-                                    "error_message": str(e)[:200],
+                                    "error_message": redact_text(str(e))[:200],
                                 },
                             )
                         )
