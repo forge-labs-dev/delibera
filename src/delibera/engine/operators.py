@@ -156,21 +156,37 @@ def reduce(tree: DeliberationTree, parent_id: str, survivor_ids: list[str]) -> N
     merged_labels = [s.label for s in survivors]
     merged_pros: list[str] = []
     merged_cons: list[str] = []
+    merged_rationale: list[str] = []
     total_score = 0.0
 
+    # Collect recommendations from survivors (use actual recommendation text, not labels)
+    survivor_recommendations: list[str] = []
     for s in survivors:
         merged_pros.extend(s.artifact.get("pros", []))
         merged_cons.extend(s.artifact.get("cons", []))
+        merged_rationale.extend(s.artifact.get("rationale", []))
         total_score += s.artifact.get("score", 0.0)
+        # Prefer actual recommendation text over label
+        rec = s.artifact.get("recommendation", "")
+        if rec:
+            survivor_recommendations.append(rec)
 
     avg_score = total_score / len(survivors) if survivors else 0.0
 
+    # Build merged recommendation from actual recommendations if available
+    if survivor_recommendations:
+        merged_recommendation = " Additionally: ".join(survivor_recommendations)
+    else:
+        merged_recommendation = f"Merged recommendation combining: {', '.join(merged_labels)}"
+
     merged_artifact: dict[str, Any] = {
         "merged_from": merged_labels,
-        "proposal": f"Merged recommendation combining: {', '.join(merged_labels)}",
+        "proposal": merged_recommendation,
+        "recommendation": merged_recommendation,
         "summary": "Combined approach incorporating strengths of top options.",
         "pros": merged_pros,
         "cons": merged_cons,
+        "rationale": merged_rationale,
         "score": avg_score,
     }
 
