@@ -21,7 +21,7 @@ from delibera.llm.base import (
 )
 
 # Default model for Gemini
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
 # Environment variable for API key
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
@@ -63,7 +63,7 @@ class GeminiClient:
         """Initialize the Gemini client.
 
         Args:
-            model: Default model name. Defaults to gemini-1.5-flash.
+            model: Default model name. Defaults to gemini-2.0-flash.
             api_key: API key. If None, reads from GEMINI_API_KEY env var.
 
         Raises:
@@ -218,8 +218,14 @@ class GeminiClient:
         import urllib.error
         import urllib.request
 
-        # Build API URL (key passed via header, not query param, to avoid leaking in logs)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        # Build API URL
+        # Note: The Gemini REST API requires the key as a query parameter;
+        # the x-goog-api-key header is not supported for this endpoint.
+        # The key is protected from trace leakage via redaction on error paths.
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={self._api_key}"
+        )
 
         # Build request body
         system_instruction, contents = self._build_contents(request)
@@ -245,10 +251,7 @@ class GeminiClient:
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self._api_key,
-            },
+            headers={"Content-Type": "application/json"},
             method="POST",
         )
 

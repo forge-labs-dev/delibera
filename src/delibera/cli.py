@@ -121,7 +121,7 @@ def version() -> None:
     "--llm-model",
     type=str,
     default=None,
-    help="LLM model name (e.g., 'gemini-1.5-flash'). If not set, uses provider default.",
+    help="LLM model name (e.g., 'gemini-2.0-flash'). If not set, uses provider default.",
 )
 @click.option(
     "--llm-temperature",
@@ -207,7 +207,7 @@ def run(
 
         try:
             llm_client = GeminiClient(
-                model=llm_model or "gemini-1.5-flash",
+                model=llm_model or "gemini-2.0-flash",
             )
             click.echo(f"LLM proposer enabled: {llm_provider} ({llm_model or 'default'})")
         except LLMAuthError as e:
