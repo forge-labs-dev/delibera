@@ -132,7 +132,7 @@ class RunSummary:
 # Limits for deterministic output
 MAX_EVIDENCE_SOURCES = 5
 MAX_KEY_CLAIMS = 5
-MAX_EXCERPT_LENGTH = 200
+MAX_EXCERPT_LENGTH = 500
 
 
 def build_run_summary(run_dir: Path) -> RunSummary:

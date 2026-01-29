@@ -135,6 +135,18 @@ def version() -> None:
     default=800,
     help="Maximum output tokens for LLM. Default: 800.",
 )
+@click.option(
+    "--retrieval-method",
+    type=click.Choice(["embedding", "keyword", "web", "hybrid"]),
+    default="keyword",
+    help="Evidence retrieval method. Default: keyword (no API needed).",
+)
+@click.option(
+    "--evidence-dir",
+    type=click.Path(exists=True),
+    default=None,
+    help="Directory containing evidence files. Default: ./evidence.",
+)
 def run(
     question: str,
     gates: bool,
@@ -147,6 +159,8 @@ def run(
     llm_model: str | None,
     llm_temperature: float,
     llm_max_output_tokens: int,
+    retrieval_method: str,
+    evidence_dir: str | None,
 ) -> None:
     """Run a deliberation on the given question.
 
@@ -160,6 +174,12 @@ def run(
     Use --protocol to specify a YAML protocol file.
 
     To use LLM-backed proposer, set --use-llm-proposer and ensure GEMINI_API_KEY is set.
+
+    Evidence retrieval methods:
+    - keyword: Simple keyword matching (default, no API needed)
+    - embedding: Semantic search using Gemini embeddings
+    - web: Real-time web search using Gemini grounding
+    - hybrid: Combines embedding + web search with RRF fusion
     """
     # Determine gate handler
     gate_handler: GateHandler
@@ -215,6 +235,29 @@ def run(
             click.echo(f"Set {GEMINI_API_KEY_ENV} environment variable.", err=True)
             sys.exit(1)
 
+    # Create retriever based on method
+    retriever = None
+    evidence_path = Path(evidence_dir) if evidence_dir else Path("evidence")
+
+    if retrieval_method in ("embedding", "keyword", "hybrid") and not evidence_path.exists():
+        click.echo(f"Warning: Evidence directory not found: {evidence_path}", err=True)
+        click.echo("Creating empty evidence directory.", err=True)
+        evidence_path.mkdir(parents=True, exist_ok=True)
+
+    if retrieval_method != "keyword":  # keyword uses stub, no API needed
+        from delibera.retrieval import create_retriever
+        from delibera.retrieval.base import RetrieverError
+
+        try:
+            retriever = create_retriever(
+                method=retrieval_method,  # type: ignore[arg-type]
+                evidence_dir=evidence_path,
+            )
+            click.echo(f"Retriever enabled: {retrieval_method}")
+        except RetrieverError as e:
+            click.echo(f"Error initializing retriever: {e}", err=True)
+            sys.exit(1)
+
     engine = Engine(
         gate_handler=gate_handler,
         gates_enabled=gates_enabled,
@@ -227,6 +270,8 @@ def run(
         llm_model=llm_model,
         llm_temperature=llm_temperature,
         llm_max_output_tokens=llm_max_output_tokens,
+        evidence_root=evidence_path,
+        retriever=retriever,
     )
 
     try:

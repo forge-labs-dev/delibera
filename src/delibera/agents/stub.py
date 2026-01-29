@@ -24,12 +24,12 @@ class PlannerStub:
         Returns:
             Dict with "branches" key containing list of labels.
         """
-        question = context.get("question", "")
+        question = context.get("question", "")  # noqa: F841
         return {
             "branches": [
-                f"Option A: Direct approach to '{question[:30]}...'",
-                f"Option B: Alternative approach to '{question[:30]}...'",
-                f"Option C: Conservative approach to '{question[:30]}...'",
+                "Option A: Direct migration approach",
+                "Option B: Incremental adoption approach",
+                "Option C: Conservative wait-and-see approach",
             ],
             "role": "planner",
             "step": "PLAN",
@@ -114,9 +114,25 @@ class ProposerStub:
         # Get fact claim that matches evidence keywords
         fact_claim = self._FACT_CLAIMS.get(option_letter, "")
 
+        # Generate meaningful summaries based on option
+        summaries = {
+            "A": (
+                "Migrate fully to GraphQL, replacing the REST API entirely. "
+                "Provides a unified API experience but requires upfront investment."
+            ),
+            "B": (
+                "Adopt GraphQL incrementally alongside REST. New features use GraphQL "
+                "while existing endpoints remain on REST, allowing gradual migration."
+            ),
+            "C": (
+                "Maintain the current REST API and evaluate GraphQL adoption later. "
+                "Monitor industry trends and wait for the ecosystem to mature."
+            ),
+        }
+
         output: dict[str, Any] = {
             "proposal": f"Proposal for {label}",
-            "summary": f"This approach addresses '{question[:50]}...' by...",
+            "summary": summaries.get(option_letter, f"Approach for addressing: {question}"),
             "pros": [f"Pro 1 for option {option_letter}", f"Pro 2 for option {option_letter}"],
             "cons": [f"Con 1 for option {option_letter}"],
             "facts": [fact_claim] if fact_claim else [],
@@ -325,7 +341,7 @@ class ResearcherStub:
             search_term: The term to search for.
 
         Returns:
-            A short excerpt (up to 200 chars) containing the term, or empty string.
+            An excerpt (up to 400 chars) containing the term, or empty string.
         """
         # Case-insensitive search
         lower_text = text.lower()
@@ -335,9 +351,9 @@ class ResearcherStub:
         if pos == -1:
             return ""
 
-        # Extract context around the match
-        start = max(0, pos - 50)
-        end = min(len(text), pos + 150)
+        # Extract more context around the match (400 chars total)
+        start = max(0, pos - 100)
+        end = min(len(text), pos + 300)
 
         # Find line boundaries for cleaner excerpt
         excerpt = text[start:end]
@@ -346,13 +362,13 @@ class ResearcherStub:
         if start > 0:
             # Find first space and trim before it
             space_pos = excerpt.find(" ")
-            if space_pos > 0 and space_pos < 20:
+            if space_pos > 0 and space_pos < 30:
                 excerpt = "..." + excerpt[space_pos + 1 :]
 
         if end < len(text):
             # Find last space and trim after it
             space_pos = excerpt.rfind(" ")
-            if space_pos > len(excerpt) - 20:
+            if space_pos > len(excerpt) - 30:
                 excerpt = excerpt[:space_pos] + "..."
 
         return excerpt.strip()

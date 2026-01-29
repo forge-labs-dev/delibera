@@ -277,7 +277,7 @@ class TestEngineWithGates:
         """Test vetoing a branch at scope gate reduces children."""
         # Create handler that vetoes Option C
         # Note: branch label matches stub output format
-        option_c_label = "Option C: Conservative approach to 'Should we use Python?...'"
+        option_c_label = "Option C: Conservative wait-and-see approach"
         veto_response = GateResponse(
             action=AllowedAction.VETO_BRANCHES,
             parameters={"branches": [option_c_label]},

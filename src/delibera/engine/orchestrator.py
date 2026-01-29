@@ -21,6 +21,7 @@ from delibera.agents.stub import (
 
 if TYPE_CHECKING:
     from delibera.llm.base import LLMClient
+    from delibera.retrieval.base import EvidenceRetriever
 from delibera.engine import operators
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
@@ -97,6 +98,7 @@ class Engine:
         llm_model: str | None = None,
         llm_temperature: float = 0.2,
         llm_max_output_tokens: int = 800,
+        retriever: EvidenceRetriever | None = None,
     ) -> None:
         """Initialize the engine.
 
@@ -116,6 +118,7 @@ class Engine:
             llm_model: Model name for LLM (if different from client default).
             llm_temperature: Temperature for LLM calls. Defaults to 0.2.
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
+            retriever: Optional evidence retriever for RESEARCH step.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry(evidence_root=evidence_root)
@@ -133,6 +136,9 @@ class Engine:
         self._llm_model = llm_model
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
+
+        # Evidence retriever
+        self._retriever = retriever
 
         # These are set during run execution
         self._current_run_id: str = ""
@@ -379,7 +385,6 @@ class Engine:
                 )
 
             # RESEARCH: Collect evidence for each branch
-            researcher = ResearcherStub()
             for child in children:
                 # Create tool callback for this step
                 tool_callback = self.make_tool_callback(
@@ -387,10 +392,40 @@ class Engine:
                     role="researcher",
                     step="RESEARCH",
                 )
-                research_output = researcher.execute(
-                    {"label": child.label, "question": question},
-                    tool=tool_callback,
-                )
+
+                # Build query from question and label
+                query = f"{question} {child.label}"
+
+                research_output: dict[str, Any]
+                # Use retriever if available, otherwise fall back to stub
+                if self._retriever is not None:
+                    try:
+                        results = self._retriever.retrieve(query, max_results=5)
+                        research_output = {
+                            "evidence": [
+                                {"source": r.source, "excerpt": r.excerpt} for r in results
+                            ],
+                            "notes": [
+                                f"Found {len(results)} results via retriever",
+                                f"Methods: {', '.join({r.method for r in results})}",
+                            ],
+                        }
+                    except Exception as e:
+                        # Fall back to stub on retriever error
+                        researcher = ResearcherStub()
+                        research_output = researcher.execute(
+                            {"label": child.label, "question": question},
+                            tool=tool_callback,
+                        )
+                        research_output["notes"] = research_output.get("notes", []) + [
+                            f"Retriever failed: {type(e).__name__}, used stub fallback"
+                        ]
+                else:
+                    researcher = ResearcherStub()
+                    research_output = researcher.execute(
+                        {"label": child.label, "question": question},
+                        tool=tool_callback,
+                    )
 
                 writer.emit(
                     TraceEvent(
