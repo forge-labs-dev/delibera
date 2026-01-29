@@ -147,6 +147,11 @@ def version() -> None:
     default=None,
     help="Directory containing evidence files. Default: ./evidence.",
 )
+@click.option(
+    "--verify/--no-verify",
+    default=False,
+    help="Verify web search results by fetching actual URLs. Default: disabled.",
+)
 def run(
     question: str,
     gates: bool,
@@ -161,6 +166,7 @@ def run(
     llm_max_output_tokens: int,
     retrieval_method: str,
     evidence_dir: str | None,
+    verify: bool,
 ) -> None:
     """Run a deliberation on the given question.
 
@@ -180,6 +186,8 @@ def run(
     - embedding: Semantic search using Gemini embeddings
     - web: Real-time web search using Gemini grounding
     - hybrid: Combines embedding + web search with RRF fusion
+
+    Use --verify to fetch and verify web search results before using them.
     """
     # Determine gate handler
     gate_handler: GateHandler
@@ -258,6 +266,14 @@ def run(
             click.echo(f"Error initializing retriever: {e}", err=True)
             sys.exit(1)
 
+    # Create verifier if requested
+    verifier = None
+    if verify:
+        from delibera.retrieval import create_verifier
+
+        verifier = create_verifier("fetch")
+        click.echo("Verification enabled: fetch")
+
     engine = Engine(
         gate_handler=gate_handler,
         gates_enabled=gates_enabled,
@@ -272,6 +288,7 @@ def run(
         llm_max_output_tokens=llm_max_output_tokens,
         evidence_root=evidence_path,
         retriever=retriever,
+        verifier=verifier,
     )
 
     try:

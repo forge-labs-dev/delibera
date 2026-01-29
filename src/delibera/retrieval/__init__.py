@@ -24,30 +24,47 @@ Example usage:
 from delibera.retrieval.base import (
     EmbeddingError,
     EvidenceRetriever,
+    EvidenceVerifier,
     IndexError,
     RetrievalResult,
     RetrieverError,
+    VerificationError,
+    VerificationResult,
     WebSearchError,
 )
 from delibera.retrieval.embedding import EmbeddingRetriever
 from delibera.retrieval.hybrid import HybridRetriever, create_retriever
 from delibera.retrieval.keyword import KeywordRetriever
+from delibera.retrieval.verify import (
+    CrossReferenceVerifier,
+    FetchVerifier,
+    LLMVerifier,
+    create_verifier,
+)
 from delibera.retrieval.web import WebRetriever
 
 __all__ = [
     # Base types
     "RetrievalResult",
     "EvidenceRetriever",
+    "VerificationResult",
+    "EvidenceVerifier",
     # Errors
     "RetrieverError",
     "EmbeddingError",
     "WebSearchError",
     "IndexError",
+    "VerificationError",
     # Retrievers
     "EmbeddingRetriever",
     "KeywordRetriever",
     "WebRetriever",
     "HybridRetriever",
-    # Factory
+    # Verifiers
+    "FetchVerifier",
+    "LLMVerifier",
+    "CrossReferenceVerifier",
+    # Factories
     "create_retriever",
+    "create_verifier",
 ]

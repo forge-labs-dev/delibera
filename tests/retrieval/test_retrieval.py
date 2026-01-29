@@ -8,13 +8,17 @@ import pytest
 
 from delibera.retrieval import (
     EmbeddingRetriever,
+    FetchVerifier,
     HybridRetriever,
     KeywordRetriever,
+    LLMVerifier,
     RetrievalResult,
+    VerificationResult,
     WebRetriever,
     create_retriever,
+    create_verifier,
 )
-from delibera.retrieval.base import EmbeddingError, WebSearchError
+from delibera.retrieval.base import EmbeddingError, VerificationError, WebSearchError
 
 
 class TestRetrievalResult:
@@ -415,3 +419,260 @@ class TestCreateRetriever:
         """Test error for unknown method."""
         with pytest.raises(ValueError, match="Unknown retrieval method"):
             create_retriever("unknown", evidence_dir=evidence_dir)  # type: ignore
+
+
+# =============================================================================
+# Verification Tests
+# =============================================================================
+
+
+class TestVerificationResult:
+    """Tests for VerificationResult dataclass."""
+
+    def test_create_verified_result(self) -> None:
+        """Test creating a verified result."""
+        original = RetrievalResult(
+            source="https://example.com",
+            excerpt="Test content",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        result = VerificationResult(
+            original=original,
+            verified=True,
+            confidence=0.85,
+            method="fetch",
+            actual_url="https://actual.example.com",
+        )
+
+        assert result.verified is True
+        assert result.confidence == 0.85
+        assert result.method == "fetch"
+        assert result.actual_url == "https://actual.example.com"
+        assert result.original.source == "https://example.com"
+
+    def test_create_failed_result(self) -> None:
+        """Test creating a failed verification result."""
+        original = RetrievalResult(
+            source="https://example.com",
+            excerpt="Test content",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        result = VerificationResult(
+            original=original,
+            verified=False,
+            confidence=0.0,
+            method="fetch",
+            details={"error": "Connection failed"},
+        )
+
+        assert result.verified is False
+        assert result.confidence == 0.0
+        assert result.details["error"] == "Connection failed"
+
+
+class TestFetchVerifier:
+    """Tests for FetchVerifier."""
+
+    def test_local_file_verified(self) -> None:
+        """Test that local files are auto-verified."""
+        verifier = FetchVerifier()
+
+        result = RetrievalResult(
+            source="evidence/doc.txt",
+            excerpt="Local content",
+            score=0.9,
+            source_type="local",
+            method="keyword",
+        )
+
+        verification = verifier.verify(result)
+
+        assert verification.verified is True
+        assert verification.confidence == 1.0
+        assert verification.details["reason"] == "local_file"
+
+    def test_web_fetch_with_mock(self) -> None:
+        """Test web fetch verification with mocked response."""
+        verifier = FetchVerifier()
+
+        result = RetrievalResult(
+            source="https://example.com/article",
+            excerpt="GraphQL is a query language",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        # Mock the URL fetch
+        mock_response = MagicMock()
+        mock_response.geturl.return_value = "https://example.com/article"
+        mock_response.read.return_value = b"GraphQL is a query language for APIs that provides..."
+        mock_response.__enter__ = lambda s: mock_response
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            verification = verifier.verify(result)
+
+        assert verification.verified is True
+        assert verification.confidence > 0.5
+        assert verification.actual_url == "https://example.com/article"
+
+    def test_web_fetch_error(self) -> None:
+        """Test handling of fetch errors."""
+        verifier = FetchVerifier()
+
+        result = RetrievalResult(
+            source="https://invalid.example.com",
+            excerpt="Some content",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=Exception("Connection failed"),
+        ):
+            verification = verifier.verify(result)
+
+        assert verification.verified is False
+        assert verification.confidence == 0.0
+        assert "error" in verification.details
+
+    def test_verify_batch(self) -> None:
+        """Test batch verification."""
+        verifier = FetchVerifier()
+
+        results = [
+            RetrievalResult(
+                source="local1.txt",
+                excerpt="Content 1",
+                score=0.9,
+                source_type="local",
+                method="keyword",
+            ),
+            RetrievalResult(
+                source="local2.txt",
+                excerpt="Content 2",
+                score=0.8,
+                source_type="local",
+                method="keyword",
+            ),
+        ]
+
+        verifications = verifier.verify_batch(results)
+
+        assert len(verifications) == 2
+        assert all(v.verified for v in verifications)
+
+
+class TestLLMVerifier:
+    """Tests for LLMVerifier."""
+
+    @pytest.fixture
+    def mock_llm_api(self) -> MagicMock:
+        """Create a mock for the LLM API."""
+        with patch("urllib.request.urlopen") as mock:
+            mock_response = MagicMock()
+            mock_response.read.return_value = json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": (
+                                            '{"verified": true, "confidence": 0.9, '
+                                            '"reasoning": "Content is accurate"}'
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+            mock_response.__enter__ = lambda s: mock_response
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+            yield mock
+
+    def test_init_without_api_key(self) -> None:
+        """Test that init fails without API key."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            pytest.raises(VerificationError, match="GEMINI_API_KEY"),
+        ):
+            LLMVerifier()
+
+    def test_init_with_api_key(self) -> None:
+        """Test init with API key."""
+        verifier = LLMVerifier(api_key="test-key")
+        assert verifier._api_key == "test-key"
+
+    def test_verify_with_llm(self, mock_llm_api: MagicMock) -> None:
+        """Test LLM verification."""
+        verifier = LLMVerifier(api_key="test-key")
+
+        result = RetrievalResult(
+            source="https://example.com",
+            excerpt="GraphQL reduces over-fetching",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        verification = verifier.verify(result, claim="GraphQL is efficient")
+
+        assert verification.verified is True
+        assert verification.confidence == 0.9
+        assert "reasoning" in verification.details
+
+    def test_verify_with_parse_error(self) -> None:
+        """Test handling of LLM response parse errors."""
+        verifier = LLMVerifier(api_key="test-key")
+
+        result = RetrievalResult(
+            source="https://example.com",
+            excerpt="Some content",
+            score=0.9,
+            source_type="web",
+            method="grounding",
+        )
+
+        # Mock an invalid response
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"candidates": []}'
+        mock_response.__enter__ = lambda s: mock_response
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            verification = verifier.verify(result)
+
+        assert verification.verified is False
+        assert verification.confidence == 0.0
+
+
+class TestCreateVerifier:
+    """Tests for the create_verifier factory function."""
+
+    def test_create_fetch_verifier(self) -> None:
+        """Test creating a fetch verifier."""
+        verifier = create_verifier("fetch")
+        assert isinstance(verifier, FetchVerifier)
+
+    def test_create_llm_verifier(self) -> None:
+        """Test creating an LLM verifier."""
+        verifier = create_verifier("llm", api_key="test-key")
+        assert isinstance(verifier, LLMVerifier)
+
+    def test_unknown_method(self) -> None:
+        """Test error for unknown method."""
+        with pytest.raises(ValueError, match="Unknown verification method"):
+            create_verifier("unknown")

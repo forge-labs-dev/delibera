@@ -77,3 +77,69 @@ class IndexError(RetrieverError):
     """Error with the evidence index."""
 
     pass
+
+
+class VerificationError(RetrieverError):
+    """Error during verification."""
+
+    pass
+
+
+@dataclass
+class VerificationResult:
+    """Result of verifying a retrieval result.
+
+    Attributes:
+        original: The original retrieval result being verified.
+        verified: Whether the result passed verification.
+        confidence: Confidence score (0.0-1.0) in the verification.
+        method: The verification method used.
+        details: Additional verification details.
+        actual_url: The resolved URL (if redirect was followed).
+        actual_content: Content fetched from the actual source (if available).
+    """
+
+    original: RetrievalResult
+    verified: bool
+    confidence: float
+    method: Literal["fetch", "cross_reference", "llm_check"]
+    details: dict[str, Any] = field(default_factory=dict)
+    actual_url: str | None = None
+    actual_content: str | None = None
+
+
+class EvidenceVerifier(Protocol):
+    """Protocol for evidence verification implementations.
+
+    Verifiers check if retrieval results are accurate and trustworthy.
+    Different implementations may fetch actual content, cross-reference
+    sources, or use LLMs for fact-checking.
+    """
+
+    def verify(
+        self,
+        result: RetrievalResult,
+    ) -> VerificationResult:
+        """Verify a single retrieval result.
+
+        Args:
+            result: The retrieval result to verify.
+
+        Returns:
+            Verification result with confidence and details.
+        """
+        ...
+
+    def verify_batch(
+        self,
+        results: list[RetrievalResult],
+    ) -> list[VerificationResult]:
+        """Verify multiple retrieval results.
+
+        Args:
+            results: List of retrieval results to verify.
+
+        Returns:
+            List of verification results in the same order.
+        """
+        ...

@@ -21,7 +21,7 @@ from delibera.agents.stub import (
 
 if TYPE_CHECKING:
     from delibera.llm.base import LLMClient
-    from delibera.retrieval.base import EvidenceRetriever
+    from delibera.retrieval.base import EvidenceRetriever, EvidenceVerifier
 from delibera.engine import operators
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree
@@ -99,6 +99,7 @@ class Engine:
         llm_temperature: float = 0.2,
         llm_max_output_tokens: int = 800,
         retriever: EvidenceRetriever | None = None,
+        verifier: EvidenceVerifier | None = None,
     ) -> None:
         """Initialize the engine.
 
@@ -119,6 +120,7 @@ class Engine:
             llm_temperature: Temperature for LLM calls. Defaults to 0.2.
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
             retriever: Optional evidence retriever for RESEARCH step.
+            verifier: Optional evidence verifier for validating web results.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry(evidence_root=evidence_root)
@@ -137,8 +139,9 @@ class Engine:
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
 
-        # Evidence retriever
+        # Evidence retriever and verifier
         self._retriever = retriever
+        self._verifier = verifier
 
         # These are set during run execution
         self._current_run_id: str = ""
@@ -401,6 +404,20 @@ class Engine:
                 if self._retriever is not None:
                     try:
                         results = self._retriever.retrieve(query, max_results=5)
+
+                        # Verify results if verifier is available
+                        verified_count = 0
+                        if self._verifier is not None:
+                            verified_results = []
+                            for r in results:
+                                v = self._verifier.verify(r)
+                                if v.verified:
+                                    verified_results.append(r)
+                                    verified_count += 1
+                            # Use verified results, or fall back to all if none verified
+                            if verified_results:
+                                results = verified_results
+
                         research_output = {
                             "evidence": [
                                 {"source": r.source, "excerpt": r.excerpt} for r in results
@@ -410,6 +427,11 @@ class Engine:
                                 f"Methods: {', '.join({r.method for r in results})}",
                             ],
                         }
+
+                        if self._verifier is not None:
+                            research_output["notes"].append(
+                                f"Verified: {verified_count}/{len(results)} passed"
+                            )
                     except Exception as e:
                         # Fall back to stub on retriever error
                         researcher = ResearcherStub()
