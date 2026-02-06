@@ -17,17 +17,17 @@ Delibera follows a **layered architecture** with strict separation of concerns:
 
 ```
 +----------------------------------------------------+
-|                    CLI / API                       |
+|                    CLI / API                        |
 +---------------------------+------------------------+
 |        Protocol Layer     |      User Gates        |
 +---------------------------+------------------------+
-|      Deliberation Engine (Orchestrator)            |
+|      Deliberation Engine (Orchestrator)             |
 +----------------------------------------------------+
-|   Epistemics   |   Tools & Policy   |   Tracing    |
+|  Epistemics  |  Tools & Policy  |  Tracing          |
 +----------------------------------------------------+
-|            Agents (Roles, LLM-backed)              |
+|         Agents (Stubs or LLM-backed)               |
 +----------------------------------------------------+
-|             External Systems (LLMs, Docs, etc.)    |
+|  LLM Providers  |  Retrieval + Verification        |
 +----------------------------------------------------+
 ```
 
@@ -116,30 +116,60 @@ Removing agents entirely should not break the engine.
 
 ---
 
-### 2.4 Persistence and lineage (Strata)
+### 2.4 LLM Integration
 
-Delibera does not manage persistence, caching, or lineage internally.
+The LLM layer provides a pluggable interface for language model access.
 
-Instead, it delegates artifact materialization and provenance tracking to **Strata**, an external persistence layer for long-horizon computation.
+Components:
+- **LLMClient** protocol — `generate(LLMRequest) -> LLMResponse`
+- **GeminiClient** — Google Gemini implementation (SDK + HTTP fallback)
+- **Prompt templates** — Structured prompts for proposer and other roles
+- **Redaction** — Sensitive data filtering before sending to LLMs
 
-Strata provides:
+LLM calls are:
+- always traced (request metadata, response, latency, token usage)
+- never made during replay or validation
+- opt-in via `--use-llm-proposer` CLI flag
+- gracefully degraded (falls back to stubs on failure)
+
+---
+
+### 2.5 Evidence Retrieval
+
+The retrieval layer provides multi-source evidence gathering.
+
+Retrievers:
+- **KeywordRetriever** — local keyword matching (default, no API needed)
+- **EmbeddingRetriever** — semantic search using Gemini embeddings
+- **WebRetriever** — web search via Gemini Google Search grounding
+- **HybridRetriever** — combines local + web with Reciprocal Rank Fusion
+
+All retrievers implement the `EvidenceRetriever` protocol and return `RetrievalResult` objects with source, excerpt, score, source_type, and method metadata.
+
+---
+
+### 2.6 Evidence Verification
+
+The verification layer validates web search results before they enter the epistemic system.
+
+Verifiers:
+- **FetchVerifier** — follows redirect URLs, fetches actual content, checks excerpt containment
+- **LLMVerifier** — uses Gemini to fact-check claims against sources
+- **CrossReferenceVerifier** — searches for corroborating sources
+
+All verifiers implement the `EvidenceVerifier` protocol. Verification is opt-in via `--verify`.
+
+---
+
+### 2.7 Persistence and lineage (Strata — planned)
+
+Delibera does not yet manage persistence, caching, or lineage internally.
+
+Future integration with **Strata** (an external persistence layer) will provide:
 - immutable, versioned artifacts
 - deterministic deduplication by provenance
 - explicit lineage between artifacts
 - crash-safe finalization and recovery
-
-Delibera uses Strata to persist:
-- agent work outputs
-- validation reports
-- reduction results
-- final decision artifacts
-
-Strata does not:
-- control deliberation flow
-- manage retries or loops
-- execute agents or tools
-
-This separation ensures that Delibera remains an orchestration and reasoning system, while Strata serves as the durable memory and history of deliberation runs.
 
 ---
 
@@ -280,40 +310,73 @@ Violations indicate architectural bugs.
 
 ## 9. Implementation guidance
 
-Recommended module split:
+Current module layout:
 
 ```
 delibera/
 ├── engine/
-│   ├── orchestrator.py
-│   ├── operators.py
-│   └── state.py
+│   ├── orchestrator.py      # Central control loop
+│   ├── operators.py         # Expand, work, validate, score, prune, reduce, finalize
+│   ├── tree.py              # Deliberation tree data structures
+│   └── state.py             # Run state tracking
 ├── protocol/
-│   ├── spec.py
-│   └── interpreter.py
+│   ├── spec.py              # Protocol dataclasses
+│   ├── loader.py            # YAML protocol loading
+│   ├── interpreter.py       # Protocol execution logic
+│   └── defaults.py          # Default protocol values
 ├── agents/
-│   ├── base.py
-│   ├── planner.py
-│   ├── proposer.py
-│   ├── skeptic.py
-│   └── judge.py
+│   ├── base.py              # Agent protocol
+│   ├── stub.py              # Deterministic stubs (planner, proposer, researcher, redteam, refiner)
+│   └── llm_proposer.py      # LLM-backed proposer
 ├── epistemics/
-│   ├── claims.py
-│   ├── evidence.py
-│   ├── objections.py
-│   ├── ledger.py
-│   └── validate.py
+│   ├── models.py            # Claim, Evidence, Objection dataclasses
+│   ├── extract.py           # Extract claims from artifacts
+│   ├── ledger.py            # Evidence ledger and support tracking
+│   └── validate.py          # Claim validation and evidence linking
+├── retrieval/
+│   ├── base.py              # Retriever/verifier protocols, result types
+│   ├── keyword.py           # Keyword-based retrieval
+│   ├── embedding.py         # Embedding-based semantic search
+│   ├── web.py               # Web search via Gemini grounding
+│   ├── hybrid.py            # RRF fusion of local + web
+│   └── verify.py            # FetchVerifier, LLMVerifier, CrossReferenceVerifier
+├── llm/
+│   ├── base.py              # LLMClient protocol, request/response types
+│   ├── gemini.py            # Google Gemini integration
+│   ├── prompts.py           # Prompt templates
+│   └── redaction.py         # Sensitive data redaction
+├── scoring/
+│   ├── score.py             # Core scoring logic
+│   ├── metrics.py           # Epistemic quality metrics
+│   └── weights.py           # Weighted score combining
 ├── tools/
-│   ├── base.py
-│   ├── router.py
-│   └── policy.py
+│   ├── spec.py              # ToolSpec protocol
+│   ├── registry.py          # Tool registry
+│   ├── router.py            # Tool request routing
+│   ├── policy.py            # Policy engine
+│   └── builtin/             # Calculator, docs search/read
 ├── gates/
-│   ├── models.py
-│   └── handlers.py
-└── trace/
-    ├── events.py
-    ├── writer.py
-    └── replay.py
+│   ├── models.py            # Gate types, summaries, responses
+│   ├── predicates.py        # Gate trigger conditions
+│   ├── handler.py           # CLI, auto-approve, scripted handlers
+│   └── apply.py             # Gate response application
+├── trace/
+│   ├── events.py            # TraceEvent dataclass
+│   ├── writer.py            # Write trace to JSONL
+│   ├── reader.py            # Read and parse traces
+│   ├── replay.py            # Deterministic replay
+│   └── validate.py          # Trace consistency validation
+├── inspect/
+│   ├── summarize.py         # Run summarization
+│   ├── render_md.py         # Markdown report generation
+│   └── render_text.py       # Text summary rendering
+├── eval/
+│   ├── runner.py            # Evaluation suite runner
+│   ├── loader.py            # Load evaluation YAML
+│   ├── metrics.py           # Evaluation metrics
+│   ├── compare.py           # Compare runs
+│   └── models.py            # Eval data models
+└── cli.py                   # Click-based CLI
 ```
 
 This layout mirrors responsibility boundaries.

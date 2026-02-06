@@ -7,20 +7,23 @@ Thank you for your interest in contributing to Delibera. This document provides 
 ```
 delibera/
 ├── src/delibera/           # Main source code
-│   ├── engine/             # Orchestrator and operators
-│   ├── protocol/           # Protocol spec and loader
-│   ├── agents/             # Agent stubs (proposer, researcher, etc.)
-│   ├── epistemics/         # Claims, evidence, ledger, validation
-│   ├── tools/              # Tool registry, router, policy
-│   ├── gates/              # User gate system
-│   ├── trace/              # Tracing, replay, validation
+│   ├── engine/             # Orchestrator, operators, tree, state
+│   ├── protocol/           # Protocol spec, loader, interpreter, defaults
+│   ├── agents/             # Stubs + LLM proposer
+│   ├── epistemics/         # Claims, evidence, objections, ledger, validation
+│   ├── retrieval/          # Keyword, embedding, web, hybrid retrievers + verification
+│   ├── llm/                # LLM client protocol, Gemini provider, prompts, redaction
+│   ├── tools/              # Tool registry, router, policy, built-ins
+│   ├── gates/              # Gate models, predicates, handlers, response application
+│   ├── trace/              # Events, writer, reader, replay, validation
 │   ├── scoring/            # Scoring metrics and weights
-│   ├── inspect/            # Run inspection and reporting
-│   ├── eval/               # Evaluation harness
+│   ├── inspect/            # Run summarization and report rendering
+│   ├── eval/               # Evaluation harness, suite runner, metrics
 │   └── cli.py              # CLI entry point
-├── tests/                  # Test suite
-├── docs/                   # Documentation
+├── tests/                  # Test suite (411 tests)
+├── docs/                   # Design documentation
 ├── protocols/              # Example protocol YAML files
+├── suites/                 # Evaluation suites
 └── evidence/               # Default evidence pack
 ```
 
@@ -59,14 +62,15 @@ Every significant action must emit a trace event:
 
 If something happens but isn't traced, it's invisible to audit and replay.
 
-### 4. No Network Tools
+### 4. Network Access Is Governed
 
-Delibera currently supports only local tools. Do not add:
-- HTTP clients
-- API integrations
-- External service calls
+Network-capable features (web retrieval, LLM calls, URL verification) must:
+- Go through the retrieval or LLM abstraction layers
+- Be opt-in via CLI flags (e.g., `--retrieval-method web`, `--verify`)
+- Never be called during replay or validation steps
+- Be fully traced for auditability
 
-This may change in future versions, but not without explicit design work.
+Do not add uncontrolled network access outside these abstractions.
 
 ## How to Add Things
 
@@ -92,6 +96,22 @@ This may change in future versions, but not without explicit design work.
 2. Follow the schema (see `tree_v1.yaml` as reference)
 3. Test with `delibera run --protocol your_protocol.yaml`
 4. Ensure all steps have corresponding agent implementations
+
+### Adding a New Retriever
+
+1. Implement the `EvidenceRetriever` protocol from `retrieval/base.py`
+2. Implement `retrieve(query, max_results) -> list[RetrievalResult]`
+3. Register in `create_retriever()` factory in `retrieval/__init__.py`
+4. Add CLI option in `cli.py` if user-selectable
+5. Add tests with mocked external calls
+
+### Adding a New LLM Provider
+
+1. Implement the `LLMClient` protocol from `llm/base.py`
+2. Implement `generate(LLMRequest) -> LLMResponse`
+3. Register in the CLI factory logic
+4. Add tests with a fake client (no real API calls in CI)
+5. Ensure replay works (LLM calls are traced, not re-invoked)
 
 ### Adding a New Gate Type
 

@@ -54,7 +54,7 @@ These invariants are enforced throughout the system:
 2. **Explicit epistemics** — Claims, evidence, and objections are first-class objects
 3. **Deterministic convergence** — Runs stop based on measurable predicates
 4. **Complete tracing** — Every action is recorded for replay
-5. **Policy-governed tools** — All external access is controlled
+5. **Policy-governed access** — All external access (tools, LLMs, web) is controlled and opt-in
 
 Violating these invariants is a correctness bug.
 
