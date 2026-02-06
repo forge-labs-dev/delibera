@@ -112,6 +112,12 @@ def version() -> None:
     help="Use LLM-backed proposer instead of stub. Requires GEMINI_API_KEY.",
 )
 @click.option(
+    "--use-llm-planner",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed planner instead of stub. Requires GEMINI_API_KEY.",
+)
+@click.option(
     "--llm-provider",
     type=click.Choice(["gemini"]),
     default="gemini",
@@ -160,6 +166,7 @@ def run(
     weights: str | None,
     protocol: str | None,
     use_llm_proposer: bool,
+    use_llm_planner: bool,
     llm_provider: str,
     llm_model: str | None,
     llm_temperature: float,
@@ -228,16 +235,24 @@ def run(
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
-    # Initialize LLM client if using LLM proposer
+    # Initialize LLM client if using any LLM-backed agent
     llm_client = None
-    if use_llm_proposer and llm_provider == "gemini":
+    if (use_llm_proposer or use_llm_planner) and llm_provider == "gemini":
         from delibera.llm import GEMINI_API_KEY_ENV, GeminiClient, LLMAuthError
 
         try:
             llm_client = GeminiClient(
                 model=llm_model or "gemini-2.0-flash",
             )
-            click.echo(f"LLM proposer enabled: {llm_provider} ({llm_model or 'default'})")
+            llm_agents = []
+            if use_llm_planner:
+                llm_agents.append("planner")
+            if use_llm_proposer:
+                llm_agents.append("proposer")
+            click.echo(
+                f"LLM agents enabled: {', '.join(llm_agents)} "
+                f"({llm_provider}, {llm_model or 'default'})"
+            )
         except LLMAuthError as e:
             click.echo(f"Error: {e}", err=True)
             click.echo(f"Set {GEMINI_API_KEY_ENV} environment variable.", err=True)
@@ -283,6 +298,7 @@ def run(
         protocol_source=protocol_source,
         llm_client=llm_client,
         use_llm_proposer=use_llm_proposer,
+        use_llm_planner=use_llm_planner,
         llm_model=llm_model,
         llm_temperature=llm_temperature,
         llm_max_output_tokens=llm_max_output_tokens,

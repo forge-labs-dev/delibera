@@ -95,6 +95,7 @@ class Engine:
         evidence_root: Path | None = None,
         llm_client: LLMClient | None = None,
         use_llm_proposer: bool = False,
+        use_llm_planner: bool = False,
         llm_model: str | None = None,
         llm_temperature: float = 0.2,
         llm_max_output_tokens: int = 800,
@@ -116,6 +117,7 @@ class Engine:
             evidence_root: Root directory for evidence files. Defaults to ./evidence.
             llm_client: Optional LLM client for LLM-backed agents.
             use_llm_proposer: Whether to use LLM-backed proposer. Defaults to False.
+            use_llm_planner: Whether to use LLM-backed planner. Defaults to False.
             llm_model: Model name for LLM (if different from client default).
             llm_temperature: Temperature for LLM calls. Defaults to 0.2.
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
@@ -135,6 +137,7 @@ class Engine:
         # LLM configuration
         self._llm_client = llm_client
         self._use_llm_proposer = use_llm_proposer
+        self._use_llm_planner = use_llm_planner
         self._llm_model = llm_model
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
@@ -223,9 +226,70 @@ class Engine:
                 )
             )
 
-            # PLAN: Call planner stub
-            planner = PlannerStub()
-            plan_output = planner.execute({"question": question})
+            # PLAN: Generate branch labels
+            if self._use_llm_planner and self._llm_client is not None:
+                from delibera.agents.llm_planner import PlannerLLM
+                from delibera.agents.llm_proposer import check_llm_allowed_in_step
+
+                check_llm_allowed_in_step("work")
+
+                planner_llm = PlannerLLM(
+                    llm_client=self._llm_client,
+                    model=self._llm_model,
+                    temperature=self._llm_temperature,
+                    max_output_tokens=400,
+                )
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_requested",
+                        run_id=run_id,
+                        payload={
+                            "node_id": root.node_id,
+                            "role": "planner",
+                            "step": "PLAN",
+                            "provider": "gemini",
+                            "model": self._llm_model or "default",
+                        },
+                    )
+                )
+
+                try:
+                    plan_output = planner_llm.execute({"question": question})
+
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_succeeded",
+                            run_id=run_id,
+                            payload={
+                                "node_id": root.node_id,
+                                "role": "planner",
+                                "step": "PLAN",
+                                "output_length": len(str(plan_output)),
+                                "llm_generated": True,
+                            },
+                        )
+                    )
+                except Exception as e:
+                    from delibera.llm.redaction import redact_text
+
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_failed",
+                            run_id=run_id,
+                            payload={
+                                "node_id": root.node_id,
+                                "role": "planner",
+                                "step": "PLAN",
+                                "error_type": type(e).__name__,
+                                "error_message": redact_text(str(e))[:200],
+                            },
+                        )
+                    )
+                    plan_output = PlannerStub().execute({"question": question})
+            else:
+                plan_output = PlannerStub().execute({"question": question})
+
             writer.emit(
                 TraceEvent(
                     event_type="work_output",

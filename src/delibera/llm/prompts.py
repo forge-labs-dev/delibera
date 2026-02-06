@@ -132,3 +132,78 @@ def get_proposer_schema_string() -> str:
     import json
 
     return json.dumps(PROPOSER_JSON_SCHEMA, indent=2)
+
+
+# JSON schema for Planner output
+PLANNER_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "branches": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Distinct approaches to the question (2-5 options)",
+            "minItems": 2,
+            "maxItems": 5,
+        },
+        "reasoning": {
+            "type": "string",
+            "description": "Brief explanation of why these branches cover the decision space",
+        },
+    },
+    "required": ["branches", "reasoning"],
+}
+
+
+def build_planner_system_prompt() -> str:
+    """Build the system prompt for the Planner agent.
+
+    Returns:
+        The system prompt string.
+    """
+    return """You are a deliberation planner for a structured decision-making system.
+
+Your task is to analyze a question and propose 2-5 distinct approaches to explore.
+
+RULES:
+1. Output ONLY valid JSON. No markdown, no explanations, no code blocks.
+2. Follow the exact schema provided.
+3. Generate 2-5 meaningfully different approaches to the question.
+4. Each branch should represent a genuinely distinct strategy, not variations of the same idea.
+5. Branch labels should be concise but descriptive (under 80 characters).
+6. Cover the decision space well: include both bold and conservative options.
+7. Explain briefly why these branches were chosen.
+
+OUTPUT FORMAT (JSON only):
+{
+  "branches": ["Approach 1: description", "Approach 2: description", ...],
+  "reasoning": "Brief explanation of the branch selection"
+}"""
+
+
+def build_planner_user_prompt(
+    question: str,
+    constraints: list[str] | None = None,
+) -> str:
+    """Build the user prompt for the Planner agent.
+
+    Args:
+        question: The deliberation question.
+        constraints: Optional constraints from user.
+
+    Returns:
+        The user prompt string.
+    """
+    parts = [
+        f"QUESTION: {question}",
+    ]
+
+    if constraints:
+        parts.append("\nCONSTRAINTS:")
+        for c in constraints:
+            parts.append(f"- {c}")
+
+    parts.append(
+        "\nPropose 2-5 distinct approaches to explore for this question. Output JSON only."
+    )
+
+    return "\n".join(parts)
