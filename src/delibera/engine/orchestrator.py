@@ -96,6 +96,9 @@ class Engine:
         llm_client: LLMClient | None = None,
         use_llm_proposer: bool = False,
         use_llm_planner: bool = False,
+        use_llm_researcher: bool = False,
+        use_llm_redteam: bool = False,
+        use_llm_refiner: bool = False,
         llm_model: str | None = None,
         llm_temperature: float = 0.2,
         llm_max_output_tokens: int = 800,
@@ -118,6 +121,9 @@ class Engine:
             llm_client: Optional LLM client for LLM-backed agents.
             use_llm_proposer: Whether to use LLM-backed proposer. Defaults to False.
             use_llm_planner: Whether to use LLM-backed planner. Defaults to False.
+            use_llm_researcher: Whether to use LLM-backed researcher. Defaults to False.
+            use_llm_redteam: Whether to use LLM-backed red-teamer. Defaults to False.
+            use_llm_refiner: Whether to use LLM-backed refiner. Defaults to False.
             llm_model: Model name for LLM (if different from client default).
             llm_temperature: Temperature for LLM calls. Defaults to 0.2.
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
@@ -138,6 +144,9 @@ class Engine:
         self._llm_client = llm_client
         self._use_llm_proposer = use_llm_proposer
         self._use_llm_planner = use_llm_planner
+        self._use_llm_researcher = use_llm_researcher
+        self._use_llm_redteam = use_llm_redteam
+        self._use_llm_refiner = use_llm_refiner
         self._llm_model = llm_model
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
@@ -460,12 +469,78 @@ class Engine:
                     step="RESEARCH",
                 )
 
-                # Build query from question and label
-                query = f"{question} {child.label}"
-
                 research_output: dict[str, Any]
-                # Use retriever if available, otherwise fall back to stub
-                if self._retriever is not None:
+
+                if self._use_llm_researcher and self._llm_client is not None:
+                    from delibera.agents.llm_researcher import ResearcherLLM
+
+                    researcher_llm = ResearcherLLM(
+                        llm_client=self._llm_client,
+                        retriever=self._retriever,
+                        model=self._llm_model,
+                        temperature=self._llm_temperature,
+                        max_output_tokens=400,
+                    )
+
+                    context = {
+                        "label": child.label,
+                        "question": question,
+                        "node_id": child.node_id,
+                        "proposal": child.artifact.get("recommendation", ""),
+                    }
+
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_requested",
+                            run_id=run_id,
+                            payload={
+                                "node_id": child.node_id,
+                                "role": "researcher",
+                                "step": "RESEARCH",
+                                "provider": "gemini",
+                                "model": self._llm_model or "default",
+                            },
+                        )
+                    )
+
+                    try:
+                        research_output = researcher_llm.execute(context, tool=tool_callback)
+
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_succeeded",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "researcher",
+                                    "step": "RESEARCH",
+                                    "output_length": len(str(research_output)),
+                                    "llm_generated": True,
+                                },
+                            )
+                        )
+                    except Exception as e:
+                        from delibera.llm.redaction import redact_text
+
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_failed",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "researcher",
+                                    "step": "RESEARCH",
+                                    "error_type": type(e).__name__,
+                                    "error_message": redact_text(str(e))[:200],
+                                },
+                            )
+                        )
+                        # Fall back to retriever or stub
+                        research_output = self._research_fallback(question, child, tool_callback)
+
+                elif self._retriever is not None:
+                    # Build query from question and label
+                    query = f"{question} {child.label}"
                     try:
                         results = self._retriever.retrieve(query, max_results=5)
 
@@ -549,7 +624,18 @@ class Engine:
                 )
 
             # REDTEAM: Generate objections for each branch
-            redteam = RedTeamStub()
+            if self._use_llm_redteam and self._llm_client is not None:
+                from delibera.agents.llm_redteam import RedTeamLLM
+
+                redteam: RedTeamStub | RedTeamLLM = RedTeamLLM(
+                    llm_client=self._llm_client,
+                    model=self._llm_model,
+                    temperature=self._llm_temperature,
+                    max_output_tokens=600,
+                )
+            else:
+                redteam = RedTeamStub()
+
             for child in children:
                 # Build claims summary for RedTeam context
                 claims_summary = [
@@ -561,14 +647,65 @@ class Engine:
                     for c in child.ledger.claims
                 ]
 
-                redteam_output = redteam.execute(
-                    {
-                        "node_id": child.node_id,
-                        "artifact": child.artifact,
-                        "claims": claims_summary,
-                        "evidence_count": len(child.ledger.evidence),
-                    }
-                )
+                redteam_context: dict[str, Any] = {
+                    "node_id": child.node_id,
+                    "artifact": child.artifact,
+                    "claims": claims_summary,
+                    "evidence_count": len(child.ledger.evidence),
+                    "question": question,
+                }
+
+                if self._use_llm_redteam and self._llm_client is not None:
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_requested",
+                            run_id=run_id,
+                            payload={
+                                "node_id": child.node_id,
+                                "role": "redteam",
+                                "step": "REDTEAM",
+                                "provider": "gemini",
+                                "model": self._llm_model or "default",
+                            },
+                        )
+                    )
+
+                    try:
+                        redteam_output = redteam.execute(redteam_context)
+
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_succeeded",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "redteam",
+                                    "step": "REDTEAM",
+                                    "output_length": len(str(redteam_output)),
+                                    "llm_generated": True,
+                                },
+                            )
+                        )
+                    except Exception as e:
+                        from delibera.llm.redaction import redact_text
+
+                        writer.emit(
+                            TraceEvent(
+                                event_type="llm_call_failed",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "role": "redteam",
+                                    "step": "REDTEAM",
+                                    "error_type": type(e).__name__,
+                                    "error_message": redact_text(str(e))[:200],
+                                },
+                            )
+                        )
+                        # Fall back to stub
+                        redteam_output = RedTeamStub().execute(redteam_context)
+                else:
+                    redteam_output = redteam.execute(redteam_context)
 
                 writer.emit(
                     TraceEvent(
@@ -695,6 +832,7 @@ class Engine:
                 run_id=run_id,
                 writer=writer,
                 current_weights=current_weights,
+                question=question,
             )
 
             # Build artifact for sign-off
@@ -1146,6 +1284,40 @@ class Engine:
 
         return callback
 
+    def _research_fallback(
+        self,
+        question: str,
+        child: Any,
+        tool_callback: Any,
+    ) -> dict[str, Any]:
+        """Fall back to retriever or stub for research when LLM researcher fails.
+
+        Args:
+            question: The deliberation question.
+            child: The child node being researched.
+            tool_callback: Tool callback for the research step.
+
+        Returns:
+            Research output dict.
+        """
+        if self._retriever is not None:
+            query = f"{question} {child.label}"
+            try:
+                results = self._retriever.retrieve(query, max_results=5)
+                return {
+                    "evidence": [{"source": r.source, "excerpt": r.excerpt} for r in results],
+                    "notes": [
+                        f"Found {len(results)} results via retriever (LLM fallback)",
+                    ],
+                }
+            except Exception:
+                pass
+        researcher = ResearcherStub()
+        return researcher.execute(
+            {"label": child.label, "question": question},
+            tool=tool_callback,
+        )
+
     def _merge_evidence_to_ledger(
         self,
         tree: DeliberationTree,
@@ -1264,6 +1436,7 @@ class Engine:
         run_id: str,
         writer: TraceWriter,
         current_weights: ScoreWeights,
+        question: str = "",
     ) -> dict[str, Any]:
         """Execute the bounded refinement loop on the merged node.
 
@@ -1281,6 +1454,7 @@ class Engine:
             run_id: The current run ID.
             writer: The trace writer.
             current_weights: The current scoring weights.
+            question: The deliberation question (for LLM refiner context).
 
         Returns:
             Refinement metadata dict with total_rounds, converged, stop_reason, history.
@@ -1306,7 +1480,18 @@ class Engine:
         converged = False
         stop_reason = "max_rounds_reached"
 
-        refiner = RefinerStub()
+        refiner: RefinerStub | Any  # Allow LLM refiner
+        if self._use_llm_refiner and self._llm_client is not None:
+            from delibera.agents.llm_refiner import RefinerLLM
+
+            refiner = RefinerLLM(
+                llm_client=self._llm_client,
+                model=self._llm_model,
+                temperature=self._llm_temperature,
+                max_output_tokens=600,
+            )
+        else:
+            refiner = RefinerStub()
 
         for round_num in range(1, max_rounds + 1):
             # Emit round started event
@@ -1365,15 +1550,82 @@ class Engine:
                 for c in merged_node.ledger.claims
             ]
 
-            # Execute refiner
-            refine_output = refiner.execute(
+            # Build objections summary for refiner context
+            objections_summary = [
                 {
-                    "node_id": merged_node.node_id,
-                    "artifact": merged_node.artifact,
-                    "claims": claims_summary,
-                    "round": round_num,
+                    "severity": o.severity.value,
+                    "rationale": o.rationale,
+                    "target": o.target,
+                    "status": o.status.value,
                 }
-            )
+                for o in merged_node.ledger.objections
+                if o.status.value == "open"
+            ]
+
+            refine_context: dict[str, Any] = {
+                "node_id": merged_node.node_id,
+                "artifact": merged_node.artifact,
+                "claims": claims_summary,
+                "round": round_num,
+                "question": question,
+                "objections": objections_summary,
+            }
+
+            # Execute refiner with LLM trace events if applicable
+            if self._use_llm_refiner and self._llm_client is not None:
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_requested",
+                        run_id=run_id,
+                        payload={
+                            "node_id": merged_node.node_id,
+                            "role": "refiner",
+                            "step": "REFINE",
+                            "round": round_num,
+                            "provider": "gemini",
+                            "model": self._llm_model or "default",
+                        },
+                    )
+                )
+
+                try:
+                    refine_output = refiner.execute(refine_context)
+
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_succeeded",
+                            run_id=run_id,
+                            payload={
+                                "node_id": merged_node.node_id,
+                                "role": "refiner",
+                                "step": "REFINE",
+                                "round": round_num,
+                                "output_length": len(str(refine_output)),
+                                "llm_generated": True,
+                            },
+                        )
+                    )
+                except Exception as e:
+                    from delibera.llm.redaction import redact_text
+
+                    writer.emit(
+                        TraceEvent(
+                            event_type="llm_call_failed",
+                            run_id=run_id,
+                            payload={
+                                "node_id": merged_node.node_id,
+                                "role": "refiner",
+                                "step": "REFINE",
+                                "round": round_num,
+                                "error_type": type(e).__name__,
+                                "error_message": redact_text(str(e))[:200],
+                            },
+                        )
+                    )
+                    # Fall back to stub
+                    refine_output = RefinerStub().execute(refine_context)
+            else:
+                refine_output = refiner.execute(refine_context)
 
             # Update artifact with refined version
             refined_artifact = refine_output.get("artifact", merged_node.artifact)

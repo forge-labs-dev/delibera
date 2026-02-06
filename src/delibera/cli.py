@@ -118,6 +118,30 @@ def version() -> None:
     help="Use LLM-backed planner instead of stub. Requires GEMINI_API_KEY.",
 )
 @click.option(
+    "--use-llm-researcher",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed researcher for smarter evidence queries. Requires GEMINI_API_KEY.",
+)
+@click.option(
+    "--use-llm-redteam",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed red-teamer for meaningful objections. Requires GEMINI_API_KEY.",
+)
+@click.option(
+    "--use-llm-refiner",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed refiner for intelligent proposal improvement. Requires GEMINI_API_KEY.",
+)
+@click.option(
+    "--use-all-llm",
+    is_flag=True,
+    default=False,
+    help="Enable all LLM-backed agents. Requires GEMINI_API_KEY.",
+)
+@click.option(
     "--llm-provider",
     type=click.Choice(["gemini"]),
     default="gemini",
@@ -167,6 +191,10 @@ def run(
     protocol: str | None,
     use_llm_proposer: bool,
     use_llm_planner: bool,
+    use_llm_researcher: bool,
+    use_llm_redteam: bool,
+    use_llm_refiner: bool,
+    use_all_llm: bool,
     llm_provider: str,
     llm_model: str | None,
     llm_temperature: float,
@@ -235,9 +263,24 @@ def run(
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
+    # Apply --use-all-llm convenience flag
+    if use_all_llm:
+        use_llm_planner = True
+        use_llm_proposer = True
+        use_llm_researcher = True
+        use_llm_redteam = True
+        use_llm_refiner = True
+
     # Initialize LLM client if using any LLM-backed agent
     llm_client = None
-    if (use_llm_proposer or use_llm_planner) and llm_provider == "gemini":
+    any_llm = (
+        use_llm_proposer
+        or use_llm_planner
+        or use_llm_researcher
+        or use_llm_redteam
+        or use_llm_refiner
+    )
+    if any_llm and llm_provider == "gemini":
         from delibera.llm import GEMINI_API_KEY_ENV, GeminiClient, LLMAuthError
 
         try:
@@ -249,6 +292,12 @@ def run(
                 llm_agents.append("planner")
             if use_llm_proposer:
                 llm_agents.append("proposer")
+            if use_llm_researcher:
+                llm_agents.append("researcher")
+            if use_llm_redteam:
+                llm_agents.append("redteam")
+            if use_llm_refiner:
+                llm_agents.append("refiner")
             click.echo(
                 f"LLM agents enabled: {', '.join(llm_agents)} "
                 f"({llm_provider}, {llm_model or 'default'})"
@@ -299,6 +348,9 @@ def run(
         llm_client=llm_client,
         use_llm_proposer=use_llm_proposer,
         use_llm_planner=use_llm_planner,
+        use_llm_researcher=use_llm_researcher,
+        use_llm_redteam=use_llm_redteam,
+        use_llm_refiner=use_llm_refiner,
         llm_model=llm_model,
         llm_temperature=llm_temperature,
         llm_max_output_tokens=llm_max_output_tokens,
