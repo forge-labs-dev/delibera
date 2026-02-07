@@ -172,6 +172,25 @@ class ProposerLLM:
             confidence = 0.5
         confidence = max(0.0, min(1.0, confidence))
 
+        # Extract and normalize sub_branches (max 2)
+        sub_raw = parsed.get("sub_branches", [])
+        if not isinstance(sub_raw, list):
+            sub_raw = []
+        sub_branches = []
+        for item in sub_raw[:2]:
+            text = str(item).strip()
+            if text:
+                if len(text) > 200:
+                    text = text[:197] + "..."
+                sub_branches.append(text)
+        # Fallback: generate generic sub-branches from the label
+        if len(sub_branches) < 2:
+            option_letter = label[0] if label else "X"
+            sub_branches = [
+                f"Subplan {option_letter}.1: Detailed implementation",
+                f"Subplan {option_letter}.2: Alternative approach",
+            ]
+
         # Build output in format compatible with ProposerStub
         # Extract facts for the "facts" field expected by engine
         fact_texts = [c["text"] for c in claims if c["type"] == "fact"]
@@ -190,6 +209,8 @@ class ProposerLLM:
             "claims": claims,
             "confidence": confidence,
             "llm_generated": True,
+            # Sub-branches for multi-level tree expansion
+            "sub_branches": sub_branches,
         }
 
 

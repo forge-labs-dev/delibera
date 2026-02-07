@@ -46,8 +46,15 @@ PROPOSER_JSON_SCHEMA: dict[str, Any] = {
             "maximum": 1.0,
             "description": "Confidence in this recommendation (0.0 to 1.0)",
         },
+        "sub_branches": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "2 alternative sub-plans for implementing this option",
+            "minItems": 2,
+            "maxItems": 2,
+        },
     },
-    "required": ["recommendation", "rationale", "claims", "confidence"],
+    "required": ["recommendation", "rationale", "claims", "confidence", "sub_branches"],
 }
 
 
@@ -74,13 +81,15 @@ RULES:
 6. Keep rationale concise (max 6 items).
 7. Keep claims focused (max 8 items).
 8. Confidence should reflect certainty (0.0-1.0).
+9. Propose exactly 2 alternative sub-plans for implementing this option.
 
 OUTPUT FORMAT (JSON only):
 {
   "recommendation": "string",
   "rationale": ["string", ...],
   "claims": [{"type": "fact|inference|plan|value", "text": "string"}, ...],
-  "confidence": 0.0-1.0
+  "confidence": 0.0-1.0,
+  "sub_branches": ["Sub-plan 1: description", "Sub-plan 2: description"]
 }"""
 
 
