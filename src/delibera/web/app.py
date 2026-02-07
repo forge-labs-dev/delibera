@@ -22,7 +22,7 @@ from delibera.web.data import (  # noqa: E402
     load_run_artifact,
     load_summary,
 )
-from delibera.web.pages import (  # noqa: E402
+from delibera.web.views import (  # noqa: E402
     evidence,
     new_run,
     overview,

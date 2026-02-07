@@ -194,12 +194,53 @@ def _render_evidence(
                         st.caption(excerpt)
 
 
+def _resolve_target(target: str, claim_map: dict[str, str]) -> str:
+    """Resolve an objection target to a human-readable label.
+
+    Args:
+        target: Either "artifact" or a claim_id.
+        claim_map: Mapping from claim_id to claim text.
+    """
+    if not target or target == "artifact":
+        return "Overall Proposal"
+    text = claim_map.get(target, "")
+    if text:
+        display = text[:80] + "..." if len(text) > 80 else text
+        return f"Claim: {display}"
+    return f"Claim {target}"
+
+
+def _build_claim_map(
+    artifact: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Build a claim_id → text lookup from artifact and validation events."""
+    claim_map: dict[str, str] = {}
+    # Source 1: artifact key_claims (top 5)
+    for claim in artifact.get("key_claims", []):
+        cid = claim.get("claim_id", "")
+        text = claim.get("text", "")
+        if cid and text:
+            claim_map[cid] = text
+    # Source 2: claim_validation_report event details (all validated claims)
+    for event in events:
+        if event.get("event_type") == "claim_validation_report":
+            for detail in event.get("payload", {}).get("details", []):
+                cid = detail.get("claim_id", "")
+                text = detail.get("text", "")
+                if cid and text and cid not in claim_map:
+                    claim_map[cid] = text
+    return claim_map
+
+
 def _render_objections(
-    _events: list[dict[str, Any]],
+    events: list[dict[str, Any]],
     artifact: dict[str, Any],
     objection_events: list[dict[str, Any]],
 ) -> None:
     """Render objections tab."""
+    claim_map = _build_claim_map(artifact, events)
+
     # Try artifact first (structured)
     objections_data = artifact.get("objections", {})
     blocking_open = objections_data.get("blocking_open", [])
@@ -225,15 +266,17 @@ def _render_objections(
         if blocking_open:
             st.subheader("🔴 Blocking Objections (Open)")
             for obj in blocking_open:
+                target_label = _resolve_target(obj.get("target", ""), claim_map)
                 with st.container(border=True):
-                    st.markdown(f"**Target**: {obj.get('target', 'unknown')[:12]}")
+                    st.markdown(f"**Targets**: {target_label}")
                     st.markdown(obj.get("rationale", ""))
 
         if nonblocking_open:
             st.subheader("🟡 Nonblocking Objections (Open)")
             for obj in nonblocking_open:
+                target_label = _resolve_target(obj.get("target", ""), claim_map)
                 with st.container(border=True):
-                    st.markdown(f"**Target**: {obj.get('target', 'unknown')[:12]}")
+                    st.markdown(f"**Targets**: {target_label}")
                     st.markdown(obj.get("rationale", ""))
         return
 
@@ -241,6 +284,16 @@ def _render_objections(
     if not objection_events:
         st.info("No objections raised in this run.")
         return
+
+    # Build node label map from events
+    node_labels: dict[str, str] = {}
+    for event in events:
+        if event.get("event_type") == "node_created":
+            payload = event.get("payload", {})
+            nid = payload.get("node_id", "")
+            label = payload.get("label", "")
+            if nid and label:
+                node_labels[nid] = label
 
     # Count by type
     blocking_count = sum(1 for e in objection_events if e.get("payload", {}).get("blocking"))
@@ -261,11 +314,17 @@ def _render_objections(
         by_node[node_id].append(payload)
 
     for node_id, objections in by_node.items():
-        with st.expander(f"Node {node_id[:8]}... — {len(objections)} objections"):
+        node_display = node_labels.get(node_id, node_id[:8] + "...")
+        with st.expander(f"{node_display} — {len(objections)} objections"):
             for obj in objections:
-                blocking = obj.get("blocking", False)
+                obj_data = obj.get("objection", obj)
+                blocking = (
+                    obj_data.get("blocking", False) or obj_data.get("severity", "") == "blocking"
+                )
                 severity = "🔴 Blocking" if blocking else "🟡 Nonblocking"
-                rationale = obj.get("rationale", "No rationale provided")
+                rationale = obj_data.get("rationale", "No rationale provided")
+                target = obj_data.get("target", "")
+                target_label = _resolve_target(target, claim_map)
                 with st.container(border=True):
-                    st.markdown(f"{severity}")
+                    st.markdown(f"{severity} — {target_label}")
                     st.markdown(rationale)
