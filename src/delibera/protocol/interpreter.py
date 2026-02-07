@@ -228,3 +228,62 @@ class ProtocolInterpreter:
             if step.id == step_id:
                 return step
         return None
+
+    def evaluate_expand_condition(self, expand_rule: ExpandSpec, node: Any) -> bool:
+        """Evaluate a condition on a node to decide whether to expand.
+
+        Supports simple metric conditions of the form "metric_name op value":
+        - unsupported_claims > 0
+        - weak_claims > 0
+        - evidence_count < 3
+
+        Args:
+            expand_rule: The expand rule with optional condition.
+            node: The node to evaluate against.
+
+        Returns:
+            True if expansion should proceed (condition met or no condition).
+        """
+        if expand_rule.condition is None:
+            return True
+
+        condition = expand_rule.condition.strip()
+        if not condition:
+            return True
+
+        from delibera.epistemics.models import ClaimStatus
+
+        # Build available metrics from node ledger
+        metrics: dict[str, int] = {
+            "unsupported_claims": sum(
+                1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED
+            ),
+            "weak_claims": sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK),
+            "evidence_count": len(node.ledger.evidence),
+            "claim_count": len(node.ledger.claims),
+            "objection_count": len(node.ledger.objections),
+        }
+
+        # Parse "metric_name op value"
+        import re
+
+        match = re.match(r"(\w+)\s*(>=|<=|>|<|==|!=)\s*(\d+)", condition)
+        if not match:
+            return True  # Unparseable condition defaults to expand
+
+        metric_name, op, value_str = match.groups()
+        if metric_name not in metrics:
+            return True  # Unknown metric defaults to expand
+
+        metric_val = metrics[metric_name]
+        threshold = int(value_str)
+
+        ops = {
+            ">": lambda a, b: a > b,
+            "<": lambda a, b: a < b,
+            ">=": lambda a, b: a >= b,
+            "<=": lambda a, b: a <= b,
+            "==": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+        }
+        return bool(ops[op](metric_val, threshold))

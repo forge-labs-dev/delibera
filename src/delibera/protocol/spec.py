@@ -41,6 +41,7 @@ class ExpandSpec:
     depth: int  # Expansion depth level (1 for options, 2 for subplans)
     source: Literal["planner_output", "agent_output"]  # Where to read branch specs
     min_quality: float | None = None  # Optional quality threshold (not used in v1)
+    condition: str | None = None  # Optional condition e.g. "unsupported_claims > 0"
 
     def __post_init__(self) -> None:
         """Validate expand specification."""
@@ -86,6 +87,7 @@ class ConvergenceSpec:
     max_rounds: int = 0  # For refine loop; 0 means no refinement
     weak_threshold: int = 5  # Maximum acceptable weak claims for convergence
     score_epsilon: float = 0.01  # Minimum score improvement to continue refining
+    dominance_threshold: float | None = None  # Ratio: top/second score for early termination
 
     def __post_init__(self) -> None:
         """Validate convergence specification."""

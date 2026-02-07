@@ -188,6 +188,12 @@ def version() -> None:
     default=False,
     help="Verify web search results by fetching actual URLs. Default: disabled.",
 )
+@click.option(
+    "--max-parallel-branches",
+    type=int,
+    default=1,
+    help="Max parallel branch execution (1=sequential). Default: 1.",
+)
 def run(
     question: str,
     gates: bool,
@@ -209,6 +215,7 @@ def run(
     retrieval_method: str,
     evidence_dir: str | None,
     verify: bool,
+    max_parallel_branches: int,
 ) -> None:
     """Run a deliberation on the given question.
 
@@ -369,6 +376,7 @@ def run(
         evidence_root=evidence_path,
         retriever=retriever,
         verifier=verifier,
+        max_parallel_branches=max_parallel_branches,
     )
 
     try:

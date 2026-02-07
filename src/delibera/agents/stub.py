@@ -138,6 +138,10 @@ class ProposerStub:
             "facts": [fact_claim] if fact_claim else [],
             "score": score,
             "role": "proposer",
+            "sub_branches": [
+                f"Subplan {option_letter}.1: Detailed implementation",
+                f"Subplan {option_letter}.2: Alternative approach",
+            ],
         }
 
         if used_tool:

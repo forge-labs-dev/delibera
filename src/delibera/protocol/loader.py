@@ -221,7 +221,7 @@ def _parse_expand_spec(data: Any, path: str) -> ExpandSpec:
     required_keys = {"id", "at_step_id", "child_kind", "max_children", "depth", "source"}
     _check_required_keys(data, required_keys, path)
 
-    known_keys = required_keys | {"min_quality"}
+    known_keys = required_keys | {"min_quality", "condition"}
     _check_unknown_keys(data, known_keys, path)
 
     expand_id = _require_string(data, "id", path)
@@ -248,6 +248,10 @@ def _parse_expand_spec(data: Any, path: str) -> ExpandSpec:
     if min_quality is not None and not isinstance(min_quality, (int, float)):
         raise ProtocolLoadError("Expected number or null", f"{path}.min_quality")
 
+    condition = data.get("condition")
+    if condition is not None and not isinstance(condition, str):
+        raise ProtocolLoadError("Expected string or null", f"{path}.condition")
+
     try:
         return ExpandSpec(
             id=expand_id,
@@ -257,6 +261,7 @@ def _parse_expand_spec(data: Any, path: str) -> ExpandSpec:
             depth=depth,
             source=source,  # type: ignore[arg-type]
             min_quality=float(min_quality) if min_quality is not None else None,
+            condition=condition,
         )
     except ValueError as e:
         raise ProtocolLoadError(str(e), path) from e
@@ -306,7 +311,7 @@ def _parse_reduce_spec(data: dict[str, Any], path: str) -> ReduceSpec:
 
 def _parse_convergence_spec(data: dict[str, Any], path: str) -> ConvergenceSpec:
     """Parse a convergence specification from a dictionary."""
-    known_keys = {"max_rounds", "weak_threshold", "score_epsilon"}
+    known_keys = {"max_rounds", "weak_threshold", "score_epsilon", "dominance_threshold"}
     _check_unknown_keys(data, known_keys, path)
 
     max_rounds = data.get("max_rounds", 0)
@@ -321,11 +326,18 @@ def _parse_convergence_spec(data: dict[str, Any], path: str) -> ConvergenceSpec:
     if not isinstance(score_epsilon, (int, float)):
         raise ProtocolLoadError("Expected number", f"{path}.score_epsilon")
 
+    dominance_threshold = data.get("dominance_threshold")
+    if dominance_threshold is not None and not isinstance(dominance_threshold, (int, float)):
+        raise ProtocolLoadError("Expected number or null", f"{path}.dominance_threshold")
+
     try:
         return ConvergenceSpec(
             max_rounds=max_rounds,
             weak_threshold=weak_threshold,
             score_epsilon=float(score_epsilon),
+            dominance_threshold=(
+                float(dominance_threshold) if dominance_threshold is not None else None
+            ),
         )
     except ValueError as e:
         raise ProtocolLoadError(str(e), path) from e

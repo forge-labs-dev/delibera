@@ -106,6 +106,7 @@ class Engine:
         llm_max_output_tokens: int = 800,
         retriever: EvidenceRetriever | None = None,
         verifier: EvidenceVerifier | None = None,
+        max_parallel_branches: int = 1,
     ) -> None:
         """Initialize the engine.
 
@@ -132,6 +133,7 @@ class Engine:
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
             retriever: Optional evidence retriever for RESEARCH step.
             verifier: Optional evidence verifier for validating web results.
+            max_parallel_branches: Max concurrent branches (1=sequential). Defaults to 1.
         """
         self.runs_dir = runs_dir or Path("runs")
         self._tool_registry = tool_registry or create_default_registry(evidence_root=evidence_root)
@@ -154,6 +156,9 @@ class Engine:
         self._llm_model = llm_model
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
+
+        # Parallel execution
+        self._max_parallel = max_parallel_branches
 
         # Evidence retriever and verifier
         self._retriever = retriever
@@ -240,81 +245,7 @@ class Engine:
             )
 
             # PLAN: Generate branch labels
-            if self._use_llm_planner and self._llm_client is not None:
-                from delibera.agents.llm_planner import PlannerLLM
-                from delibera.agents.llm_proposer import check_llm_allowed_in_step
-
-                check_llm_allowed_in_step("work")
-
-                planner_llm = PlannerLLM(
-                    llm_client=self._llm_client,
-                    model=self._llm_model,
-                    temperature=self._llm_temperature,
-                    max_output_tokens=400,
-                )
-
-                writer.emit(
-                    TraceEvent(
-                        event_type="llm_call_requested",
-                        run_id=run_id,
-                        payload={
-                            "node_id": root.node_id,
-                            "role": "planner",
-                            "step": "PLAN",
-                            "provider": "gemini",
-                            "model": self._llm_model or "default",
-                        },
-                    )
-                )
-
-                try:
-                    plan_output = planner_llm.execute({"question": question})
-
-                    writer.emit(
-                        TraceEvent(
-                            event_type="llm_call_succeeded",
-                            run_id=run_id,
-                            payload={
-                                "node_id": root.node_id,
-                                "role": "planner",
-                                "step": "PLAN",
-                                "output_length": len(str(plan_output)),
-                                "llm_generated": True,
-                            },
-                        )
-                    )
-                except Exception as e:
-                    from delibera.llm.redaction import redact_text
-
-                    writer.emit(
-                        TraceEvent(
-                            event_type="llm_call_failed",
-                            run_id=run_id,
-                            payload={
-                                "node_id": root.node_id,
-                                "role": "planner",
-                                "step": "PLAN",
-                                "error_type": type(e).__name__,
-                                "error_message": redact_text(str(e))[:200],
-                            },
-                        )
-                    )
-                    plan_output = PlannerStub().execute({"question": question})
-            else:
-                plan_output = PlannerStub().execute({"question": question})
-
-            writer.emit(
-                TraceEvent(
-                    event_type="work_output",
-                    run_id=run_id,
-                    payload={
-                        "step": "PLAN",
-                        "node_id": root.node_id,
-                        "role": "planner",
-                        "output": plan_output,
-                    },
-                )
-            )
+            plan_output = self._execute_plan(root, question, run_id, writer)
 
             # SCOPE GATE: Get user approval for branches
             branch_labels = plan_output["branches"]
@@ -325,508 +256,18 @@ class Engine:
                     node_id=root.node_id,
                 )
 
-            # EXPAND: Create child nodes
-            children = operators.expand(tree, root.node_id, branch_labels)
-
-            writer.emit(
-                TraceEvent(
-                    event_type="expand",
-                    run_id=run_id,
-                    payload={
-                        "parent_id": root.node_id,
-                        "child_ids": [c.node_id for c in children],
-                        "labels": branch_labels,
-                    },
-                )
-            )
-
-            for child in children:
-                writer.emit(
-                    TraceEvent(
-                        event_type="node_created",
-                        run_id=run_id,
-                        payload={
-                            "node_id": child.node_id,
-                            "parent_id": child.parent_id,
-                            "kind": child.kind,
-                            "depth": child.depth,
-                            "label": child.label,
-                        },
-                    )
-                )
-
-            # PROPOSE: Generate proposals for each branch
-            proposer: ProposerStub | Any  # Allow LLM proposer
-            if self._use_llm_proposer and self._llm_client is not None:
-                from delibera.agents.llm_proposer import ProposerLLM, check_llm_allowed_in_step
-
-                # Runtime guard: LLM only allowed in work steps
-                check_llm_allowed_in_step("work")
-
-                proposer = ProposerLLM(
-                    llm_client=self._llm_client,
-                    model=self._llm_model,
-                    temperature=self._llm_temperature,
-                    max_output_tokens=self._llm_max_output_tokens,
-                )
-            else:
-                proposer = ProposerStub()
-
-            for child in children:
-                # Create tool callback for this step
-                tool_callback = self.make_tool_callback(
-                    node_id=child.node_id,
-                    role="proposer",
-                    step="PROPOSE",
-                )
-
-                # Emit LLM trace events if using LLM proposer
-                if self._use_llm_proposer and self._llm_client is not None:
-                    # Build context with node_id for tracing
-                    context = {
-                        "label": child.label,
-                        "question": question,
-                        "node_id": child.node_id,
-                    }
-
-                    # Emit llm_call_requested before the call
-                    writer.emit(
-                        TraceEvent(
-                            event_type="llm_call_requested",
-                            run_id=run_id,
-                            payload={
-                                "node_id": child.node_id,
-                                "role": "proposer",
-                                "step": "PROPOSE",
-                                "provider": "gemini",
-                                "model": self._llm_model or "default",
-                            },
-                        )
-                    )
-
-                    try:
-                        propose_output = proposer.execute(context, tool=tool_callback)
-
-                        # Emit llm_call_succeeded
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_succeeded",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "proposer",
-                                    "step": "PROPOSE",
-                                    "output_length": len(str(propose_output)),
-                                    "llm_generated": True,
-                                },
-                            )
-                        )
-                    except Exception as e:
-                        # Emit llm_call_failed and fall back to stub
-                        from delibera.llm.redaction import redact_text
-
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_failed",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "proposer",
-                                    "step": "PROPOSE",
-                                    "error_type": type(e).__name__,
-                                    "error_message": redact_text(str(e))[:200],
-                                },
-                            )
-                        )
-                        # Fall back to stub
-                        propose_output = ProposerStub().execute(
-                            {"label": child.label, "question": question},
-                            tool=tool_callback,
-                        )
-                else:
-                    propose_output = proposer.execute(
-                        {"label": child.label, "question": question},
-                        tool=tool_callback,
-                    )
-
-                tree.update_artifact(child.node_id, propose_output)
-
-                writer.emit(
-                    TraceEvent(
-                        event_type="work_output",
-                        run_id=run_id,
-                        payload={
-                            "step": "PROPOSE",
-                            "node_id": child.node_id,
-                            "role": "proposer",
-                            "output": propose_output,
-                        },
-                    )
-                )
-
-            # RESEARCH: Collect evidence for each branch
-            for child in children:
-                # Create tool callback for this step
-                tool_callback = self.make_tool_callback(
-                    node_id=child.node_id,
-                    role="researcher",
-                    step="RESEARCH",
-                )
-
-                research_output: dict[str, Any]
-
-                if self._use_llm_researcher and self._llm_client is not None:
-                    from delibera.agents.llm_researcher import ResearcherLLM
-
-                    researcher_llm = ResearcherLLM(
-                        llm_client=self._llm_client,
-                        retriever=self._retriever,
-                        model=self._llm_model,
-                        temperature=self._llm_temperature,
-                        max_output_tokens=400,
-                    )
-
-                    context = {
-                        "label": child.label,
-                        "question": question,
-                        "node_id": child.node_id,
-                        "proposal": child.artifact.get("recommendation", ""),
-                    }
-
-                    writer.emit(
-                        TraceEvent(
-                            event_type="llm_call_requested",
-                            run_id=run_id,
-                            payload={
-                                "node_id": child.node_id,
-                                "role": "researcher",
-                                "step": "RESEARCH",
-                                "provider": "gemini",
-                                "model": self._llm_model or "default",
-                            },
-                        )
-                    )
-
-                    try:
-                        research_output = researcher_llm.execute(context, tool=tool_callback)
-
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_succeeded",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "researcher",
-                                    "step": "RESEARCH",
-                                    "output_length": len(str(research_output)),
-                                    "llm_generated": True,
-                                },
-                            )
-                        )
-                    except Exception as e:
-                        from delibera.llm.redaction import redact_text
-
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_failed",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "researcher",
-                                    "step": "RESEARCH",
-                                    "error_type": type(e).__name__,
-                                    "error_message": redact_text(str(e))[:200],
-                                },
-                            )
-                        )
-                        # Fall back to retriever or stub
-                        research_output = self._research_fallback(question, child, tool_callback)
-
-                elif self._retriever is not None:
-                    # Build query from question and label
-                    query = f"{question} {child.label}"
-                    try:
-                        results = self._retriever.retrieve(query, max_results=5)
-
-                        # Verify results if verifier is available
-                        verified_count = 0
-                        if self._verifier is not None:
-                            verified_results = []
-                            for r in results:
-                                v = self._verifier.verify(r)
-                                if v.verified:
-                                    verified_results.append(r)
-                                    verified_count += 1
-                            # Use verified results, or fall back to all if none verified
-                            if verified_results:
-                                results = verified_results
-
-                        research_output = {
-                            "evidence": [
-                                {"source": r.source, "excerpt": r.excerpt} for r in results
-                            ],
-                            "notes": [
-                                f"Found {len(results)} results via retriever",
-                                f"Methods: {', '.join({r.method for r in results})}",
-                            ],
-                        }
-
-                        if self._verifier is not None:
-                            research_output["notes"].append(
-                                f"Verified: {verified_count}/{len(results)} passed"
-                            )
-                    except Exception as e:
-                        # Fall back to stub on retriever error
-                        researcher = ResearcherStub()
-                        research_output = researcher.execute(
-                            {"label": child.label, "question": question},
-                            tool=tool_callback,
-                        )
-                        research_output["notes"] = research_output.get("notes", []) + [
-                            f"Retriever failed: {type(e).__name__}, used stub fallback"
-                        ]
-                else:
-                    researcher = ResearcherStub()
-                    research_output = researcher.execute(
-                        {"label": child.label, "question": question},
-                        tool=tool_callback,
-                    )
-
-                writer.emit(
-                    TraceEvent(
-                        event_type="work_output",
-                        run_id=run_id,
-                        payload={
-                            "step": "RESEARCH",
-                            "node_id": child.node_id,
-                            "role": "researcher",
-                            "output": research_output,
-                        },
-                    )
-                )
-
-                # Merge evidence into node ledger (engine-controlled state update)
-                evidence_items = research_output.get("evidence", [])
-                self._merge_evidence_to_ledger(tree, child.node_id, evidence_items, run_id, writer)
-
-            # CLAIM_CHECK: Extract and validate claims for each branch
-            for child in children:
-                report = self._validate_claims(tree, child.node_id, "proposer", run_id, writer)
-                writer.emit(
-                    TraceEvent(
-                        event_type="claim_validation_report",
-                        run_id=run_id,
-                        payload={
-                            "node_id": child.node_id,
-                            "supported": report.supported,
-                            "weak": report.weak,
-                            "unsupported": report.unsupported,
-                            "details": report.details,
-                            "support_relations": report.support_relations,
-                        },
-                    )
-                )
-
-            # REDTEAM: Generate objections for each branch
-            if self._use_llm_redteam and self._llm_client is not None:
-                from delibera.agents.llm_redteam import RedTeamLLM
-
-                redteam: RedTeamStub | RedTeamLLM = RedTeamLLM(
-                    llm_client=self._llm_client,
-                    model=self._llm_model,
-                    temperature=self._llm_temperature,
-                    max_output_tokens=600,
-                )
-            else:
-                redteam = RedTeamStub()
-
-            for child in children:
-                # Build claims summary for RedTeam context
-                claims_summary = [
-                    {
-                        "claim_id": c.claim_id,
-                        "claim_type": c.claim_type.value,
-                        "status": c.status.value,
-                    }
-                    for c in child.ledger.claims
-                ]
-
-                redteam_context: dict[str, Any] = {
-                    "node_id": child.node_id,
-                    "artifact": child.artifact,
-                    "claims": claims_summary,
-                    "evidence_count": len(child.ledger.evidence),
-                    "question": question,
-                }
-
-                if self._use_llm_redteam and self._llm_client is not None:
-                    writer.emit(
-                        TraceEvent(
-                            event_type="llm_call_requested",
-                            run_id=run_id,
-                            payload={
-                                "node_id": child.node_id,
-                                "role": "redteam",
-                                "step": "REDTEAM",
-                                "provider": "gemini",
-                                "model": self._llm_model or "default",
-                            },
-                        )
-                    )
-
-                    try:
-                        redteam_output = redteam.execute(redteam_context)
-
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_succeeded",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "redteam",
-                                    "step": "REDTEAM",
-                                    "output_length": len(str(redteam_output)),
-                                    "llm_generated": True,
-                                },
-                            )
-                        )
-                    except Exception as e:
-                        from delibera.llm.redaction import redact_text
-
-                        writer.emit(
-                            TraceEvent(
-                                event_type="llm_call_failed",
-                                run_id=run_id,
-                                payload={
-                                    "node_id": child.node_id,
-                                    "role": "redteam",
-                                    "step": "REDTEAM",
-                                    "error_type": type(e).__name__,
-                                    "error_message": redact_text(str(e))[:200],
-                                },
-                            )
-                        )
-                        # Fall back to stub
-                        redteam_output = RedTeamStub().execute(redteam_context)
-                else:
-                    redteam_output = redteam.execute(redteam_context)
-
-                writer.emit(
-                    TraceEvent(
-                        event_type="work_output",
-                        run_id=run_id,
-                        payload={
-                            "step": "REDTEAM",
-                            "node_id": child.node_id,
-                            "role": "redteam",
-                            "output": redteam_output,
-                        },
-                    )
-                )
-
-                # Merge objections into node ledger (engine-controlled state update)
-                objection_items = redteam_output.get("objections", [])
-                self._merge_objections_to_ledger(
-                    tree, child.node_id, objection_items, run_id, writer
-                )
-
-            # SCORE: Compute scores for each branch
+            # PROCESS TREE: Expand, run pipeline, score, prune, reduce (recursive)
             current_weights = self._initial_weights or create_default_weights()
-            node_scores: dict[str, tuple[float, dict[str, float]]] = {}
-
-            for child in children:
-                score_result = score_node(child, current_weights)
-                node_scores[child.node_id] = (score_result.score, score_result.metrics)
-
-                # Store score in node artifact for pruning
-                child.artifact["score"] = score_result.score
-                child.artifact["metrics"] = score_result.metrics
-
-                writer.emit(
-                    TraceEvent(
-                        event_type="score_computed",
-                        run_id=run_id,
-                        payload={
-                            "node_id": child.node_id,
-                            "score": score_result.score,
-                            "metrics": score_result.metrics,
-                            "weights": score_result.weights.to_dict(),
-                        },
-                    )
-                )
-
-            # TRADEOFF GATE: Trigger if near-tie detected (unless weights pre-set)
-            sorted_scores = sorted(
-                [(nid, score) for nid, (score, _) in node_scores.items()],
-                key=lambda x: x[1],
-                reverse=True,
-            )
-
-            # Only trigger tradeoff gate if weights weren't pre-set via CLI
-            if self._initial_weights is None and needs_tradeoff_gate(
-                sorted_scores, self._gates_enabled, self._tie_threshold
-            ):
-                current_weights = self._handle_tradeoff_gate(
-                    children=children,
-                    node_scores=node_scores,
-                    current_weights=current_weights,
-                    root_node_id=root.node_id,
-                )
-
-                # Recompute scores with new weights
-                for child in children:
-                    score_result = score_node(child, current_weights)
-                    node_scores[child.node_id] = (score_result.score, score_result.metrics)
-                    child.artifact["score"] = score_result.score
-                    child.artifact["metrics"] = score_result.metrics
-
-            # PRUNE: Keep top-k by epistemic quality + score (from protocol)
-            child_ids = [c.node_id for c in children]
-            keep_k, _prune_rule = self._interpreter.get_prune_spec()
-            survivor_ids, pruned_ids = operators.prune(
-                tree, child_ids, keep_count=keep_k, weights=current_weights
-            )
-
-            writer.emit(
-                TraceEvent(
-                    event_type="prune",
-                    run_id=run_id,
-                    payload={
-                        "survivor_ids": survivor_ids,
-                        "pruned_ids": pruned_ids,
-                        "weights_used": current_weights.to_dict(),
-                        "scores": {nid: score for nid, (score, _) in node_scores.items()},
-                    },
-                )
-            )
-
-            # REDUCE: Merge survivors into single node
-            merged_node = operators.reduce(tree, root.node_id, survivor_ids)
-
-            writer.emit(
-                TraceEvent(
-                    event_type="node_created",
-                    run_id=run_id,
-                    payload={
-                        "node_id": merged_node.node_id,
-                        "parent_id": merged_node.parent_id,
-                        "kind": merged_node.kind,
-                        "depth": merged_node.depth,
-                        "label": merged_node.label,
-                    },
-                )
-            )
-
-            writer.emit(
-                TraceEvent(
-                    event_type="reduce",
-                    run_id=run_id,
-                    payload={
-                        "survivor_ids": survivor_ids,
-                        "merged_node_id": merged_node.node_id,
-                        "merged_artifact": merged_node.artifact,
-                    },
-                )
+            merged_node, current_weights = self._process_level(
+                tree=tree,
+                parent_id=root.node_id,
+                labels=branch_labels,
+                child_kind="option",
+                question=question,
+                run_id=run_id,
+                writer=writer,
+                current_weights=current_weights,
+                depth=1,
             )
 
             # REFINE LOOP: Execute bounded refinement if protocol defines it
@@ -1878,3 +1319,1047 @@ class Engine:
 
         # All predicates satisfied
         return True, "all_predicates_satisfied"
+
+    # ------------------------------------------------------------------
+    # Extracted step methods (Phase A refactor)
+    # ------------------------------------------------------------------
+
+    def _execute_plan(
+        self,
+        root: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+    ) -> dict[str, Any]:
+        """Execute the PLAN step: generate branch labels.
+
+        Args:
+            root: The root node.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+
+        Returns:
+            Plan output dict with "branches" key.
+        """
+        if self._use_llm_planner and self._llm_client is not None:
+            from delibera.agents.llm_planner import PlannerLLM
+            from delibera.agents.llm_proposer import check_llm_allowed_in_step
+
+            check_llm_allowed_in_step("work")
+
+            planner_llm = PlannerLLM(
+                llm_client=self._llm_client,
+                model=self._llm_model,
+                temperature=self._llm_temperature,
+                max_output_tokens=400,
+            )
+
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_requested",
+                    run_id=run_id,
+                    payload={
+                        "node_id": root.node_id,
+                        "role": "planner",
+                        "step": "PLAN",
+                        "provider": "gemini",
+                        "model": self._llm_model or "default",
+                    },
+                )
+            )
+
+            try:
+                plan_output = planner_llm.execute({"question": question})
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_succeeded",
+                        run_id=run_id,
+                        payload={
+                            "node_id": root.node_id,
+                            "role": "planner",
+                            "step": "PLAN",
+                            "output_length": len(str(plan_output)),
+                            "llm_generated": True,
+                        },
+                    )
+                )
+            except Exception as e:
+                from delibera.llm.redaction import redact_text
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_failed",
+                        run_id=run_id,
+                        payload={
+                            "node_id": root.node_id,
+                            "role": "planner",
+                            "step": "PLAN",
+                            "error_type": type(e).__name__,
+                            "error_message": redact_text(str(e))[:200],
+                        },
+                    )
+                )
+                plan_output = PlannerStub().execute({"question": question})
+        else:
+            plan_output = PlannerStub().execute({"question": question})
+
+        writer.emit(
+            TraceEvent(
+                event_type="work_output",
+                run_id=run_id,
+                payload={
+                    "step": "PLAN",
+                    "node_id": root.node_id,
+                    "role": "planner",
+                    "output": plan_output,
+                },
+            )
+        )
+
+        return plan_output
+
+    def _execute_propose_on_node(
+        self,
+        child: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> dict[str, Any]:
+        """Execute the PROPOSE step for a single node.
+
+        Args:
+            child: The child node to generate a proposal for.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+            tree: The deliberation tree.
+
+        Returns:
+            The propose output dict.
+        """
+        # Create tool callback for this step
+        tool_callback = self.make_tool_callback(
+            node_id=child.node_id,
+            role="proposer",
+            step="PROPOSE",
+        )
+
+        # Emit LLM trace events if using LLM proposer
+        if self._use_llm_proposer and self._llm_client is not None:
+            from delibera.agents.llm_proposer import ProposerLLM, check_llm_allowed_in_step
+
+            check_llm_allowed_in_step("work")
+
+            proposer: ProposerStub | ProposerLLM = ProposerLLM(
+                llm_client=self._llm_client,
+                model=self._llm_model,
+                temperature=self._llm_temperature,
+                max_output_tokens=self._llm_max_output_tokens,
+            )
+
+            # Build context with node_id for tracing
+            context = {
+                "label": child.label,
+                "question": question,
+                "node_id": child.node_id,
+            }
+
+            # Emit llm_call_requested before the call
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_requested",
+                    run_id=run_id,
+                    payload={
+                        "node_id": child.node_id,
+                        "role": "proposer",
+                        "step": "PROPOSE",
+                        "provider": "gemini",
+                        "model": self._llm_model or "default",
+                    },
+                )
+            )
+
+            try:
+                propose_output = proposer.execute(context, tool=tool_callback)
+
+                # Emit llm_call_succeeded
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_succeeded",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "proposer",
+                            "step": "PROPOSE",
+                            "output_length": len(str(propose_output)),
+                            "llm_generated": True,
+                        },
+                    )
+                )
+            except Exception as e:
+                # Emit llm_call_failed and fall back to stub
+                from delibera.llm.redaction import redact_text
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_failed",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "proposer",
+                            "step": "PROPOSE",
+                            "error_type": type(e).__name__,
+                            "error_message": redact_text(str(e))[:200],
+                        },
+                    )
+                )
+                # Fall back to stub
+                propose_output = ProposerStub().execute(
+                    {"label": child.label, "question": question},
+                    tool=tool_callback,
+                )
+        else:
+            proposer = ProposerStub()
+            propose_output = proposer.execute(
+                {"label": child.label, "question": question},
+                tool=tool_callback,
+            )
+
+        tree.update_artifact(child.node_id, propose_output)
+
+        writer.emit(
+            TraceEvent(
+                event_type="work_output",
+                run_id=run_id,
+                payload={
+                    "step": "PROPOSE",
+                    "node_id": child.node_id,
+                    "role": "proposer",
+                    "output": propose_output,
+                },
+            )
+        )
+
+        return propose_output
+
+    def _execute_research_on_node(
+        self,
+        child: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> dict[str, Any]:
+        """Execute the RESEARCH step for a single node.
+
+        Args:
+            child: The child node to research.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+            tree: The deliberation tree.
+
+        Returns:
+            The research output dict.
+        """
+        # Create tool callback for this step
+        tool_callback = self.make_tool_callback(
+            node_id=child.node_id,
+            role="researcher",
+            step="RESEARCH",
+        )
+
+        research_output: dict[str, Any]
+
+        if self._use_llm_researcher and self._llm_client is not None:
+            from delibera.agents.llm_researcher import ResearcherLLM
+
+            researcher_llm = ResearcherLLM(
+                llm_client=self._llm_client,
+                retriever=self._retriever,
+                model=self._llm_model,
+                temperature=self._llm_temperature,
+                max_output_tokens=400,
+            )
+
+            context = {
+                "label": child.label,
+                "question": question,
+                "node_id": child.node_id,
+                "proposal": child.artifact.get("recommendation", ""),
+            }
+
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_requested",
+                    run_id=run_id,
+                    payload={
+                        "node_id": child.node_id,
+                        "role": "researcher",
+                        "step": "RESEARCH",
+                        "provider": "gemini",
+                        "model": self._llm_model or "default",
+                    },
+                )
+            )
+
+            try:
+                research_output = researcher_llm.execute(context, tool=tool_callback)
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_succeeded",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "researcher",
+                            "step": "RESEARCH",
+                            "output_length": len(str(research_output)),
+                            "llm_generated": True,
+                        },
+                    )
+                )
+            except Exception as e:
+                from delibera.llm.redaction import redact_text
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_failed",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "researcher",
+                            "step": "RESEARCH",
+                            "error_type": type(e).__name__,
+                            "error_message": redact_text(str(e))[:200],
+                        },
+                    )
+                )
+                # Fall back to retriever or stub
+                research_output = self._research_fallback(question, child, tool_callback)
+
+        elif self._retriever is not None:
+            # Build query from question and label
+            query = f"{question} {child.label}"
+            try:
+                results = self._retriever.retrieve(query, max_results=5)
+
+                # Verify results if verifier is available
+                verified_count = 0
+                if self._verifier is not None:
+                    verified_results = []
+                    for r in results:
+                        v = self._verifier.verify(r)
+                        if v.verified:
+                            verified_results.append(r)
+                            verified_count += 1
+                    # Use verified results, or fall back to all if none verified
+                    if verified_results:
+                        results = verified_results
+
+                research_output = {
+                    "evidence": [{"source": r.source, "excerpt": r.excerpt} for r in results],
+                    "notes": [
+                        f"Found {len(results)} results via retriever",
+                        f"Methods: {', '.join({r.method for r in results})}",
+                    ],
+                }
+
+                if self._verifier is not None:
+                    research_output["notes"].append(
+                        f"Verified: {verified_count}/{len(results)} passed"
+                    )
+            except Exception as e:
+                # Fall back to stub on retriever error
+                researcher = ResearcherStub()
+                research_output = researcher.execute(
+                    {"label": child.label, "question": question},
+                    tool=tool_callback,
+                )
+                research_output["notes"] = research_output.get("notes", []) + [
+                    f"Retriever failed: {type(e).__name__}, used stub fallback"
+                ]
+        else:
+            researcher = ResearcherStub()
+            research_output = researcher.execute(
+                {"label": child.label, "question": question},
+                tool=tool_callback,
+            )
+
+        writer.emit(
+            TraceEvent(
+                event_type="work_output",
+                run_id=run_id,
+                payload={
+                    "step": "RESEARCH",
+                    "node_id": child.node_id,
+                    "role": "researcher",
+                    "output": research_output,
+                },
+            )
+        )
+
+        # Merge evidence into node ledger (engine-controlled state update)
+        evidence_items = research_output.get("evidence", [])
+        self._merge_evidence_to_ledger(tree, child.node_id, evidence_items, run_id, writer)
+
+        return research_output
+
+    def _execute_claim_check_on_node(
+        self,
+        child: Any,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> ClaimCheckReport:
+        """Execute the CLAIM_CHECK step for a single node.
+
+        Args:
+            child: The child node to validate.
+            run_id: The current run ID.
+            writer: The trace writer.
+            tree: The deliberation tree.
+
+        Returns:
+            ClaimCheckReport with validation results.
+        """
+        report = self._validate_claims(tree, child.node_id, "proposer", run_id, writer)
+        writer.emit(
+            TraceEvent(
+                event_type="claim_validation_report",
+                run_id=run_id,
+                payload={
+                    "node_id": child.node_id,
+                    "supported": report.supported,
+                    "weak": report.weak,
+                    "unsupported": report.unsupported,
+                    "details": report.details,
+                    "support_relations": report.support_relations,
+                },
+            )
+        )
+        return report
+
+    def _execute_redteam_on_node(
+        self,
+        child: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> dict[str, Any]:
+        """Execute the REDTEAM step for a single node.
+
+        Args:
+            child: The child node to attack.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+            tree: The deliberation tree.
+
+        Returns:
+            The redteam output dict.
+        """
+        if self._use_llm_redteam and self._llm_client is not None:
+            from delibera.agents.llm_redteam import RedTeamLLM
+
+            redteam: RedTeamStub | RedTeamLLM = RedTeamLLM(
+                llm_client=self._llm_client,
+                model=self._llm_model,
+                temperature=self._llm_temperature,
+                max_output_tokens=600,
+            )
+        else:
+            redteam = RedTeamStub()
+
+        # Build claims summary for RedTeam context
+        claims_summary = [
+            {
+                "claim_id": c.claim_id,
+                "claim_type": c.claim_type.value,
+                "status": c.status.value,
+            }
+            for c in child.ledger.claims
+        ]
+
+        redteam_context: dict[str, Any] = {
+            "node_id": child.node_id,
+            "artifact": child.artifact,
+            "claims": claims_summary,
+            "evidence_count": len(child.ledger.evidence),
+            "question": question,
+        }
+
+        if self._use_llm_redteam and self._llm_client is not None:
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_requested",
+                    run_id=run_id,
+                    payload={
+                        "node_id": child.node_id,
+                        "role": "redteam",
+                        "step": "REDTEAM",
+                        "provider": "gemini",
+                        "model": self._llm_model or "default",
+                    },
+                )
+            )
+
+            try:
+                redteam_output = redteam.execute(redteam_context)
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_succeeded",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "redteam",
+                            "step": "REDTEAM",
+                            "output_length": len(str(redteam_output)),
+                            "llm_generated": True,
+                        },
+                    )
+                )
+            except Exception as e:
+                from delibera.llm.redaction import redact_text
+
+                writer.emit(
+                    TraceEvent(
+                        event_type="llm_call_failed",
+                        run_id=run_id,
+                        payload={
+                            "node_id": child.node_id,
+                            "role": "redteam",
+                            "step": "REDTEAM",
+                            "error_type": type(e).__name__,
+                            "error_message": redact_text(str(e))[:200],
+                        },
+                    )
+                )
+                # Fall back to stub
+                redteam_output = RedTeamStub().execute(redteam_context)
+        else:
+            redteam_output = redteam.execute(redteam_context)
+
+        writer.emit(
+            TraceEvent(
+                event_type="work_output",
+                run_id=run_id,
+                payload={
+                    "step": "REDTEAM",
+                    "node_id": child.node_id,
+                    "role": "redteam",
+                    "output": redteam_output,
+                },
+            )
+        )
+
+        # Merge objections into node ledger (engine-controlled state update)
+        objection_items = redteam_output.get("objections", [])
+        self._merge_objections_to_ledger(tree, child.node_id, objection_items, run_id, writer)
+
+        return redteam_output
+
+    def _execute_score_nodes(
+        self,
+        children: list[Any],
+        run_id: str,
+        writer: TraceWriter,
+        weights: ScoreWeights,
+    ) -> dict[str, tuple[float, dict[str, float]]]:
+        """Execute the SCORE step for all children.
+
+        Args:
+            children: List of child nodes to score.
+            run_id: The current run ID.
+            writer: The trace writer.
+            weights: Scoring weights to use.
+
+        Returns:
+            Dict mapping node_id to (score, metrics) tuples.
+        """
+        node_scores: dict[str, tuple[float, dict[str, float]]] = {}
+
+        for child in children:
+            score_result = score_node(child, weights)
+            node_scores[child.node_id] = (score_result.score, score_result.metrics)
+
+            # Store score in node artifact for pruning
+            child.artifact["score"] = score_result.score
+            child.artifact["metrics"] = score_result.metrics
+
+            writer.emit(
+                TraceEvent(
+                    event_type="score_computed",
+                    run_id=run_id,
+                    payload={
+                        "node_id": child.node_id,
+                        "score": score_result.score,
+                        "metrics": score_result.metrics,
+                        "weights": score_result.weights.to_dict(),
+                    },
+                )
+            )
+
+        return node_scores
+
+    def _execute_step_on_node(
+        self,
+        step: Any,
+        node: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> dict[str, Any]:
+        """Execute a single pipeline step on a single node.
+
+        Routes based on step.id to the appropriate execution method.
+        Returns the step output dict (useful for expansion label extraction).
+
+        Args:
+            step: The StepSpec to execute.
+            node: The node to execute on.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+            tree: The deliberation tree.
+
+        Returns:
+            Step output dict.
+        """
+        if step.id == "propose":
+            return self._execute_propose_on_node(node, question, run_id, writer, tree)
+        elif step.id == "research":
+            return self._execute_research_on_node(node, question, run_id, writer, tree)
+        elif step.id == "validate":
+            report = self._execute_claim_check_on_node(node, run_id, writer, tree)
+            return {"report": report}
+        elif step.id == "redteam":
+            return self._execute_redteam_on_node(node, question, run_id, writer, tree)
+        else:
+            raise ValueError(f"Unknown step id: {step.id}")
+
+    # ------------------------------------------------------------------
+    # Multi-level tree processing (Phase B)
+    # ------------------------------------------------------------------
+
+    def _process_level(
+        self,
+        tree: DeliberationTree,
+        parent_id: str,
+        labels: list[str],
+        child_kind: str,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        current_weights: ScoreWeights,
+        depth: int,
+    ) -> tuple[Any, ScoreWeights]:
+        """Process one level of the deliberation tree.
+
+        1. EXPAND parent into children
+        2. For each step in branch_pipeline:
+           a. Execute step on all children
+           b. Check if expansion triggers after this step at this depth
+           c. If triggers: recurse into sub-level for each child
+           d. Merge sub-tree results back into child's ledger
+        3. SCORE children
+        4. TRADEOFF GATE (depth 1 only)
+        5. PRUNE + REDUCE → return merged node
+
+        Args:
+            tree: The deliberation tree.
+            parent_id: The parent node ID to expand from.
+            labels: Branch labels for child nodes.
+            child_kind: The kind of child node ("option", "plan", "risk").
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer.
+            current_weights: Scoring weights.
+            depth: The current depth level (1-based).
+
+        Returns:
+            Tuple of (merged_node, current_weights) — weights may be
+            updated by the tradeoff gate at depth 1.
+        """
+        assert self._interpreter is not None
+
+        # EXPAND
+        children = operators.expand(tree, parent_id, labels, kind=child_kind)
+
+        writer.emit(
+            TraceEvent(
+                event_type="expand",
+                run_id=run_id,
+                payload={
+                    "parent_id": parent_id,
+                    "child_ids": [c.node_id for c in children],
+                    "labels": labels,
+                    "depth": depth,
+                },
+            )
+        )
+
+        for child in children:
+            writer.emit(
+                TraceEvent(
+                    event_type="node_created",
+                    run_id=run_id,
+                    payload={
+                        "node_id": child.node_id,
+                        "parent_id": child.parent_id,
+                        "kind": child.kind,
+                        "depth": child.depth,
+                        "label": child.label,
+                    },
+                )
+            )
+
+        # Execute branch pipeline steps, checking for sub-expansion after each
+        last_outputs: dict[str, dict[str, Any]] = {}
+
+        for step in self._protocol.branch_pipeline:
+            if self._max_parallel > 1 and len(children) > 1:
+                last_outputs.update(
+                    self._execute_step_parallel(step, children, question, run_id, writer, tree)
+                )
+            else:
+                for child in children:
+                    output = self._execute_step_on_node(step, child, question, run_id, writer, tree)
+                    last_outputs[child.node_id] = output
+
+            # Check for sub-expansion after this step
+            expand_rule = self._interpreter.should_expand_after_step(step.id, depth)
+            if expand_rule is not None and depth < self._interpreter.max_depth():
+                # Collect children that need sub-expansion
+                children_with_labels: list[tuple[Any, list[str]]] = []
+                for child in children:
+                    sub_labels = self._interpreter.get_expand_labels_from_output(
+                        last_outputs.get(child.node_id, {}), expand_rule
+                    )
+                    if sub_labels:
+                        writer.emit(
+                            TraceEvent(
+                                event_type="sub_expansion_triggered",
+                                run_id=run_id,
+                                payload={
+                                    "parent_node_id": child.node_id,
+                                    "expand_rule_id": expand_rule.id,
+                                    "sub_labels": sub_labels,
+                                    "child_kind": expand_rule.child_kind,
+                                    "target_depth": depth + 1,
+                                },
+                            )
+                        )
+                        children_with_labels.append((child, sub_labels))
+
+                # Filter by conditional expansion
+                eligible: list[tuple[Any, list[str]]] = []
+                for child, sub_labels in children_with_labels:
+                    if self._interpreter.evaluate_expand_condition(expand_rule, child):
+                        eligible.append((child, sub_labels))
+                    else:
+                        writer.emit(
+                            TraceEvent(
+                                event_type="expansion_skipped",
+                                run_id=run_id,
+                                payload={
+                                    "node_id": child.node_id,
+                                    "expand_rule_id": expand_rule.id,
+                                    "condition": expand_rule.condition,
+                                    "reason": "condition_not_met",
+                                },
+                            )
+                        )
+
+                if self._max_parallel > 1 and len(eligible) > 1:
+                    self._process_sub_expansions_parallel(
+                        eligible,
+                        tree,
+                        expand_rule,
+                        question,
+                        run_id,
+                        writer,
+                        current_weights,
+                        depth,
+                    )
+                else:
+                    for child, sub_labels in eligible:
+                        sub_merged, _ = self._process_level(
+                            tree=tree,
+                            parent_id=child.node_id,
+                            labels=sub_labels,
+                            child_kind=expand_rule.child_kind,
+                            question=question,
+                            run_id=run_id,
+                            writer=writer,
+                            current_weights=current_weights,
+                            depth=depth + 1,
+                        )
+                        self._merge_subtree_into_parent(child, sub_merged, run_id, writer)
+
+        # SCORE
+        node_scores = self._execute_score_nodes(children, run_id, writer, current_weights)
+
+        # TRADEOFF GATE (depth 1 only)
+        if depth == 1 and self._initial_weights is None:
+            sorted_scores = sorted(
+                [(nid, score) for nid, (score, _) in node_scores.items()],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+
+            if needs_tradeoff_gate(sorted_scores, self._gates_enabled, self._tie_threshold):
+                current_weights = self._handle_tradeoff_gate(
+                    children=children,
+                    node_scores=node_scores,
+                    current_weights=current_weights,
+                    root_node_id=parent_id,
+                )
+
+                # Recompute scores with new weights
+                for child in children:
+                    score_result = score_node(child, current_weights)
+                    node_scores[child.node_id] = (score_result.score, score_result.metrics)
+                    child.artifact["score"] = score_result.score
+                    child.artifact["metrics"] = score_result.metrics
+
+        # DOMINANCE CHECK: Override keep_k if one option clearly dominates
+        keep_k, _prune_rule = self._interpreter.get_prune_spec()
+        convergence = self._interpreter.get_convergence_spec()
+        if convergence.dominance_threshold is not None:
+            sorted_by_score = sorted(node_scores.values(), key=lambda x: x[0], reverse=True)
+            if len(sorted_by_score) >= 2:
+                top_score = sorted_by_score[0][0]
+                second_score = sorted_by_score[1][0]
+                if second_score > 0 and top_score / second_score >= convergence.dominance_threshold:
+                    writer.emit(
+                        TraceEvent(
+                            event_type="early_termination",
+                            run_id=run_id,
+                            payload={
+                                "reason": "dominance",
+                                "top_score": top_score,
+                                "second_score": second_score,
+                                "ratio": top_score / second_score,
+                                "threshold": convergence.dominance_threshold,
+                                "depth": depth,
+                            },
+                        )
+                    )
+                    keep_k = 1
+
+        # PRUNE
+        child_ids = [c.node_id for c in children]
+        survivor_ids, pruned_ids = operators.prune(
+            tree, child_ids, keep_count=keep_k, weights=current_weights
+        )
+
+        writer.emit(
+            TraceEvent(
+                event_type="prune",
+                run_id=run_id,
+                payload={
+                    "survivor_ids": survivor_ids,
+                    "pruned_ids": pruned_ids,
+                    "weights_used": current_weights.to_dict(),
+                    "scores": {nid: score for nid, (score, _) in node_scores.items()},
+                    "depth": depth,
+                },
+            )
+        )
+
+        # REDUCE
+        merged_node = operators.reduce(tree, parent_id, survivor_ids)
+
+        writer.emit(
+            TraceEvent(
+                event_type="node_created",
+                run_id=run_id,
+                payload={
+                    "node_id": merged_node.node_id,
+                    "parent_id": merged_node.parent_id,
+                    "kind": merged_node.kind,
+                    "depth": merged_node.depth,
+                    "label": merged_node.label,
+                },
+            )
+        )
+
+        writer.emit(
+            TraceEvent(
+                event_type="reduce",
+                run_id=run_id,
+                payload={
+                    "survivor_ids": survivor_ids,
+                    "merged_node_id": merged_node.node_id,
+                    "merged_artifact": merged_node.artifact,
+                    "depth": depth,
+                },
+            )
+        )
+
+        return merged_node, current_weights
+
+    def _merge_subtree_into_parent(
+        self,
+        parent_node: Any,
+        sub_merged: Any,
+        run_id: str,
+        writer: TraceWriter,
+    ) -> None:
+        """Merge sub-tree results into parent node's ledger.
+
+        After a sub-level completes (prune + reduce), its merged node's
+        ledger (claims, evidence, objections) is merged into the parent
+        node so that remaining pipeline steps at the parent level benefit
+        from the sub-tree's findings.
+
+        Args:
+            parent_node: The parent node to enrich.
+            sub_merged: The merged node from the sub-level.
+            run_id: The current run ID.
+            writer: The trace writer.
+        """
+        from delibera.epistemics.ledger import merge_ledgers
+
+        parent_node.ledger = merge_ledgers([parent_node.ledger, sub_merged.ledger])
+        parent_node.artifact.setdefault("sub_trees", []).append(
+            {
+                "sub_merged_from": sub_merged.artifact.get("merged_from", []),
+                "sub_recommendation": sub_merged.artifact.get("recommendation", ""),
+                "sub_score": sub_merged.artifact.get("score", 0.0),
+            }
+        )
+
+        writer.emit(
+            TraceEvent(
+                event_type="subtree_merged_into_parent",
+                run_id=run_id,
+                payload={
+                    "parent_node_id": parent_node.node_id,
+                    "sub_merged_node_id": sub_merged.node_id,
+                    "sub_merged_from": sub_merged.artifact.get("merged_from", []),
+                },
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Parallel execution helpers (Phase C)
+    # ------------------------------------------------------------------
+
+    def _execute_step_parallel(
+        self,
+        step: Any,
+        children: list[Any],
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        tree: DeliberationTree,
+    ) -> dict[str, dict[str, Any]]:
+        """Execute a pipeline step on multiple children in parallel.
+
+        Args:
+            step: The StepSpec to execute.
+            children: List of child nodes.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer (thread-safe).
+            tree: The deliberation tree.
+
+        Returns:
+            Dict mapping node_id to step output.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        outputs: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
+            futures = {
+                executor.submit(
+                    self._execute_step_on_node, step, child, question, run_id, writer, tree
+                ): child
+                for child in children
+            }
+            for future in as_completed(futures):
+                child = futures[future]
+                try:
+                    outputs[child.node_id] = future.result()
+                except Exception as e:
+                    writer.emit(
+                        TraceEvent(
+                            event_type="step_execution_failed",
+                            run_id=run_id,
+                            payload={
+                                "node_id": child.node_id,
+                                "step": step.id,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e)[:200],
+                            },
+                        )
+                    )
+                    outputs[child.node_id] = {}
+        return outputs
+
+    def _process_sub_expansions_parallel(
+        self,
+        children_with_labels: list[tuple[Any, list[str]]],
+        tree: DeliberationTree,
+        expand_rule: Any,
+        question: str,
+        run_id: str,
+        writer: TraceWriter,
+        current_weights: ScoreWeights,
+        depth: int,
+    ) -> None:
+        """Process sub-expansions for multiple children in parallel.
+
+        Args:
+            children_with_labels: List of (child, sub_labels) tuples.
+            tree: The deliberation tree.
+            expand_rule: The expand rule that triggered sub-expansion.
+            question: The deliberation question.
+            run_id: The current run ID.
+            writer: The trace writer (thread-safe).
+            current_weights: Scoring weights.
+            depth: The current depth level.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
+            futures = {
+                executor.submit(
+                    self._process_level,
+                    tree,
+                    child.node_id,
+                    sub_labels,
+                    expand_rule.child_kind,
+                    question,
+                    run_id,
+                    writer,
+                    current_weights,
+                    depth + 1,
+                ): child
+                for child, sub_labels in children_with_labels
+            }
+            for future in as_completed(futures):
+                child = futures[future]
+                try:
+                    sub_merged, _ = future.result()
+                    self._merge_subtree_into_parent(child, sub_merged, run_id, writer)
+                except Exception as e:
+                    writer.emit(
+                        TraceEvent(
+                            event_type="sub_expansion_failed",
+                            run_id=run_id,
+                            payload={
+                                "parent_node_id": child.node_id,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e)[:200],
+                            },
+                        )
+                    )

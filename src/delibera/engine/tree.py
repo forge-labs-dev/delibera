@@ -27,7 +27,7 @@ class Node:
 
     node_id: str
     parent_id: str | None
-    kind: Literal["root", "option", "merged"]
+    kind: Literal["root", "option", "plan", "risk", "merged"]
     depth: int
     status: Literal["active", "pruned", "merged"] = "active"
     artifact: dict[str, Any] = field(default_factory=dict)
@@ -80,7 +80,12 @@ class DeliberationTree:
         self._root_id = node_id
         return node
 
-    def add_child(self, parent_id: str, label: str, kind: Literal["option", "merged"]) -> Node:
+    def add_child(
+        self,
+        parent_id: str,
+        label: str,
+        kind: Literal["option", "plan", "risk", "merged"],
+    ) -> Node:
         """Add a child node to the tree.
 
         Args:

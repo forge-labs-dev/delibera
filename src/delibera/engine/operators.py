@@ -14,20 +14,26 @@ from delibera.epistemics.models import ClaimStatus, ClaimType, ObjectionSeverity
 from delibera.epistemics.validate import ClaimCheckReport, validate_claims
 
 
-def expand(tree: DeliberationTree, parent_id: str, labels: list[str]) -> list[Node]:
+def expand(
+    tree: DeliberationTree,
+    parent_id: str,
+    labels: list[str],
+    kind: str = "option",
+) -> list[Node]:
     """Create child nodes for the given parent.
 
     Args:
         tree: The deliberation tree.
         parent_id: The parent node's ID.
         labels: Labels for each child branch.
+        kind: The kind of child node to create (default "option").
 
     Returns:
         List of created child nodes.
     """
     children = []
     for label in labels:
-        child = tree.add_child(parent_id, label=label, kind="option")
+        child = tree.add_child(parent_id, label=label, kind=kind)  # type: ignore[arg-type]
         children.append(child)
     return children
 
