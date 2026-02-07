@@ -668,3 +668,119 @@ def build_validator_user_prompt(
     parts.append("\nAssess whether the evidence supports each claim. Output JSON only.")
 
     return "\n".join(parts)
+
+
+# JSON schema for Synthesizer output
+SYNTHESIZER_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "recommendation": {
+            "type": "string",
+            "description": "A coherent synthesized recommendation",
+        },
+        "summary": {
+            "type": "string",
+            "description": "Brief summary of the synthesized recommendation",
+        },
+        "rationale": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Key reasons supporting this synthesis (max 6)",
+            "maxItems": 6,
+        },
+        "key_tradeoffs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Key tradeoffs or tensions between the options (max 4)",
+            "maxItems": 4,
+        },
+    },
+    "required": ["recommendation", "summary", "rationale", "key_tradeoffs"],
+}
+
+
+def build_synthesizer_system_prompt() -> str:
+    """Build the system prompt for the Synthesizer (LLM reduce) agent.
+
+    Returns:
+        The system prompt string.
+    """
+    return (
+        "You are a decision synthesis expert for a structured deliberation system.\n"
+        "\n"
+        "Your task is to synthesize multiple competing recommendations from a "
+        "structured deliberation into a single coherent recommendation.\n"
+        "\n"
+        "RULES:\n"
+        "1. Output ONLY valid JSON. No markdown, no explanations, no code blocks.\n"
+        "2. If options agree, combine their strengths into a unified recommendation.\n"
+        "3. If options conflict, acknowledge the tension explicitly and explain "
+        "the tradeoff.\n"
+        "4. NEVER simply concatenate contradictory recommendations.\n"
+        "5. Prioritize higher-scoring options but incorporate insights from all.\n"
+        "6. Be specific about which aspects of each option you adopt and why.\n"
+        "7. List the key tradeoffs the decision-maker should be aware of.\n"
+        "\n"
+        "OUTPUT FORMAT (JSON only):\n"
+        "{\n"
+        '  "recommendation": "A coherent synthesized recommendation",\n'
+        '  "summary": "Brief summary",\n'
+        '  "rationale": ["reason 1", ...],\n'
+        '  "key_tradeoffs": ["tradeoff 1", ...]\n'
+        "}"
+    )
+
+
+def build_synthesizer_user_prompt(
+    question: str,
+    survivors: list[dict[str, Any]],
+) -> str:
+    """Build the user prompt for the Synthesizer agent.
+
+    Args:
+        question: The deliberation question.
+        survivors: List of survivor dicts, each with label, score,
+                   recommendation, rationale, pros, cons.
+
+    Returns:
+        The user prompt string.
+    """
+    parts = [
+        f"QUESTION: {question}",
+        f"\nThe deliberation produced {len(survivors)} surviving options (ranked by score):\n",
+    ]
+
+    for i, s in enumerate(survivors, 1):
+        label = s.get("label", "?")
+        score = s.get("score", 0.0)
+        rec = str(s.get("recommendation", ""))[:500]
+        parts.append(f"--- OPTION {i}: {label} (score: {score:.2f}) ---")
+        parts.append(f"Recommendation: {rec}")
+
+        rationale = s.get("rationale", [])
+        if rationale:
+            parts.append("Rationale:")
+            for r in rationale[:4]:
+                parts.append(f"  - {str(r)[:200]}")
+
+        pros = s.get("pros", [])
+        if pros:
+            parts.append("Pros:")
+            for p in pros[:3]:
+                parts.append(f"  + {str(p)[:200]}")
+
+        cons = s.get("cons", [])
+        if cons:
+            parts.append("Cons:")
+            for c in cons[:3]:
+                parts.append(f"  - {str(c)[:200]}")
+
+        parts.append("")
+
+    parts.append(
+        "Synthesize these options into a single coherent recommendation. "
+        "If options conflict, acknowledge the tension and explain the tradeoff. "
+        "Output JSON only."
+    )
+
+    return "\n".join(parts)

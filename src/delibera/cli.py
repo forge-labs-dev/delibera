@@ -749,5 +749,54 @@ def report(
         sys.exit(1)
 
 
+@main.command()
+@click.option(
+    "--port",
+    default=8501,
+    help="Port for the Streamlit server.",
+)
+@click.option(
+    "--runs-dir",
+    default="runs",
+    help="Directory containing run data.",
+)
+def ui(port: int, runs_dir: str) -> None:
+    """Launch the Delibera web UI.
+
+    Opens a Streamlit dashboard for visualizing deliberation runs.
+    Requires the [web] optional dependencies: pip install delibera[web]
+    """
+    import subprocess
+
+    app_path = Path(__file__).parent / "web" / "app.py"
+
+    if not app_path.exists():
+        click.echo(f"Error: Web UI not found at {app_path}", err=True)
+        sys.exit(1)
+
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(app_path),
+                "--server.port",
+                str(port),
+                "--",
+                "--runs-dir",
+                runs_dir,
+            ],
+            check=True,
+        )
+    except FileNotFoundError:
+        click.echo(
+            "Error: Streamlit not found. Install with: pip install delibera[web]",
+            err=True,
+        )
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

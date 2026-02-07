@@ -70,7 +70,12 @@ class PruneSpec:
 class ReduceSpec:
     """Specification for reduction behavior."""
 
-    rule: Literal["promote_single", "merge_artifacts"]
+    rule: Literal[
+        "promote_single",
+        "merge_artifacts",
+        "ranked_alternatives",
+        "llm_synthesize",
+    ]
 
 
 @dataclass

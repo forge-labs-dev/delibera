@@ -2175,7 +2175,15 @@ class Engine:
         )
 
         # REDUCE
-        merged_node = operators.reduce(tree, parent_id, survivor_ids)
+        reduce_rule = self._interpreter.get_reduce_rule()
+        merged_node = operators.reduce(
+            tree,
+            parent_id,
+            survivor_ids,
+            rule=reduce_rule,
+            llm_client=self._llm_client,
+            question=question,
+        )
 
         writer.emit(
             TraceEvent(

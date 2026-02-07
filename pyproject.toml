@@ -24,6 +24,12 @@ classifiers = [
 llm = [
     "google-generativeai>=0.8.0",
 ]
+web = [
+    "streamlit>=1.40.0",
+    "streamlit-agraph>=0.0.45",
+    "plotly>=5.18.0",
+    "watchdog>=4.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/forge-labs-dev/delibera"
@@ -89,3 +95,12 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = ["google.*", "google.generativeai"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["streamlit", "streamlit.*", "streamlit_agraph", "plotly", "plotly.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "delibera.web.*"
+disallow_untyped_decorators = false
+warn_unused_ignores = false

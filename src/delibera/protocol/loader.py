@@ -40,7 +40,12 @@ VALID_STEP_KINDS = {"work", "validate", "score"}
 VALID_CHILD_KINDS = {"option", "plan", "risk"}
 VALID_SOURCES = {"planner_output", "agent_output"}
 VALID_PRUNE_RULES = {"epistemic_then_score", "score_only"}
-VALID_REDUCE_RULES = {"promote_single", "merge_artifacts"}
+VALID_REDUCE_RULES = {
+    "promote_single",
+    "merge_artifacts",
+    "ranked_alternatives",
+    "llm_synthesize",
+}
 
 
 def load_protocol_from_yaml(path: Path) -> ProtocolSpec:

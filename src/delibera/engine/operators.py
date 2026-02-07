@@ -4,7 +4,10 @@ Operators are applied exclusively by the engine. They modify the
 deliberation tree structure and produce trace-worthy events.
 """
 
-from typing import Any
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
 
 from delibera.engine.state import RunState
 from delibera.engine.tree import DeliberationTree, Node
@@ -12,6 +15,11 @@ from delibera.epistemics.extract import extract_claims
 from delibera.epistemics.ledger import merge_ledgers
 from delibera.epistemics.models import ClaimStatus, ClaimType, ObjectionSeverity, ObjectionStatus
 from delibera.epistemics.validate import ClaimCheckReport, validate_claims
+
+if TYPE_CHECKING:
+    from delibera.llm.base import LLMClient
+
+logger = logging.getLogger(__name__)
 
 
 def expand(
@@ -144,57 +152,43 @@ def prune(
     return survivor_ids, pruned_ids
 
 
-def reduce(tree: DeliberationTree, parent_id: str, survivor_ids: list[str]) -> Node:
-    """Merge surviving branches into a single node.
+def reduce(
+    tree: DeliberationTree,
+    parent_id: str,
+    survivor_ids: list[str],
+    rule: str = "merge_artifacts",
+    llm_client: LLMClient | None = None,
+    question: str = "",
+) -> Node:
+    """Reduce surviving branches into a single node using the specified strategy.
 
     Args:
         tree: The deliberation tree.
         parent_id: The parent node's ID (where to attach merged node).
         survivor_ids: IDs of nodes to merge.
+        rule: Reduce strategy — one of "merge_artifacts", "promote_single",
+              "ranked_alternatives", or "llm_synthesize".
+        llm_client: Optional LLM client (required for "llm_synthesize").
+        question: The deliberation question (used by "llm_synthesize").
 
     Returns:
         The merged node.
     """
-    # Collect artifacts and ledgers from survivors
     survivors = [tree.get_node(nid) for nid in survivor_ids]
 
-    # Build merged artifact
-    merged_labels = [s.label for s in survivors]
-    merged_pros: list[str] = []
-    merged_cons: list[str] = []
-    merged_rationale: list[str] = []
-    total_score = 0.0
-
-    # Collect recommendations from survivors (use actual recommendation text, not labels)
-    survivor_recommendations: list[str] = []
-    for s in survivors:
-        merged_pros.extend(s.artifact.get("pros", []))
-        merged_cons.extend(s.artifact.get("cons", []))
-        merged_rationale.extend(s.artifact.get("rationale", []))
-        total_score += s.artifact.get("score", 0.0)
-        # Prefer actual recommendation text over label
-        rec = s.artifact.get("recommendation", "")
-        if rec:
-            survivor_recommendations.append(rec)
-
-    avg_score = total_score / len(survivors) if survivors else 0.0
-
-    # Build merged recommendation from actual recommendations if available
-    if survivor_recommendations:
-        merged_recommendation = " Additionally: ".join(survivor_recommendations)
+    if rule == "promote_single":
+        merged_artifact = _reduce_promote_single(survivors)
+    elif rule == "ranked_alternatives":
+        merged_artifact = _reduce_ranked_alternatives(survivors)
+    elif rule == "llm_synthesize":
+        merged_artifact = _reduce_llm_synthesize(
+            survivors,
+            llm_client=llm_client,
+            question=question,
+        )
     else:
-        merged_recommendation = f"Merged recommendation combining: {', '.join(merged_labels)}"
-
-    merged_artifact: dict[str, Any] = {
-        "merged_from": merged_labels,
-        "proposal": merged_recommendation,
-        "recommendation": merged_recommendation,
-        "summary": "Combined approach incorporating strengths of top options.",
-        "pros": merged_pros,
-        "cons": merged_cons,
-        "rationale": merged_rationale,
-        "score": avg_score,
-    }
+        # Default: merge_artifacts (original behavior)
+        merged_artifact = _reduce_merge_artifacts(survivors)
 
     # Create merged node
     merged_node = tree.add_child(parent_id, label="merged", kind="merged")
@@ -209,6 +203,201 @@ def reduce(tree: DeliberationTree, parent_id: str, survivor_ids: list[str]) -> N
         tree.set_status(nid, "merged")
 
     return merged_node
+
+
+def _reduce_merge_artifacts(survivors: list[Node]) -> dict[str, Any]:
+    """Merge all survivor artifacts by concatenation (original behavior)."""
+    merged_labels = [s.label for s in survivors]
+    merged_pros: list[str] = []
+    merged_cons: list[str] = []
+    merged_rationale: list[str] = []
+    total_score = 0.0
+
+    survivor_recommendations: list[str] = []
+    for s in survivors:
+        merged_pros.extend(s.artifact.get("pros", []))
+        merged_cons.extend(s.artifact.get("cons", []))
+        merged_rationale.extend(s.artifact.get("rationale", []))
+        total_score += s.artifact.get("score", 0.0)
+        rec = s.artifact.get("recommendation", "")
+        if rec:
+            survivor_recommendations.append(rec)
+
+    avg_score = total_score / len(survivors) if survivors else 0.0
+
+    if survivor_recommendations:
+        merged_recommendation = " Additionally: ".join(survivor_recommendations)
+    else:
+        merged_recommendation = f"Merged recommendation combining: {', '.join(merged_labels)}"
+
+    return {
+        "merged_from": merged_labels,
+        "proposal": merged_recommendation,
+        "recommendation": merged_recommendation,
+        "summary": "Combined approach incorporating strengths of top options.",
+        "pros": merged_pros,
+        "cons": merged_cons,
+        "rationale": merged_rationale,
+        "score": avg_score,
+    }
+
+
+def _reduce_promote_single(survivors: list[Node]) -> dict[str, Any]:
+    """Promote the highest-scoring survivor as the sole winner."""
+    # Sort by score descending, then label for determinism
+    ranked = sorted(
+        survivors,
+        key=lambda s: (-s.artifact.get("score", 0.0), s.label),
+    )
+    winner = ranked[0]
+
+    return {
+        "merged_from": [winner.label],
+        "proposal": winner.artifact.get("recommendation", winner.label),
+        "recommendation": winner.artifact.get("recommendation", winner.label),
+        "summary": winner.artifact.get("summary", f"Selected: {winner.label}"),
+        "pros": winner.artifact.get("pros", []),
+        "cons": winner.artifact.get("cons", []),
+        "rationale": winner.artifact.get("rationale", []),
+        "score": winner.artifact.get("score", 0.0),
+    }
+
+
+def _reduce_ranked_alternatives(survivors: list[Node]) -> dict[str, Any]:
+    """Present survivors as ranked primary recommendation + alternatives."""
+    ranked = sorted(
+        survivors,
+        key=lambda s: (-s.artifact.get("score", 0.0), s.label),
+    )
+    primary = ranked[0]
+
+    alternatives: list[dict[str, Any]] = []
+    alt_labels: list[str] = []
+    for s in ranked[1:]:
+        alternatives.append(
+            {
+                "label": s.label,
+                "recommendation": s.artifact.get("recommendation", s.label),
+                "score": s.artifact.get("score", 0.0),
+            }
+        )
+        alt_labels.append(s.label)
+
+    primary_rec = primary.artifact.get("recommendation", primary.label)
+    if alt_labels:
+        summary = (
+            f"Primary recommendation: {primary.label}. "
+            f"Alternative(s) also considered: {', '.join(alt_labels)}."
+        )
+    else:
+        summary = f"Selected: {primary.label}"
+
+    return {
+        "merged_from": [s.label for s in ranked],
+        "proposal": primary_rec,
+        "recommendation": primary_rec,
+        "summary": summary,
+        "pros": primary.artifact.get("pros", []),
+        "cons": primary.artifact.get("cons", []),
+        "rationale": primary.artifact.get("rationale", []),
+        "score": primary.artifact.get("score", 0.0),
+        "alternatives": alternatives,
+    }
+
+
+def _reduce_llm_synthesize(
+    survivors: list[Node],
+    llm_client: LLMClient | None = None,
+    question: str = "",
+) -> dict[str, Any]:
+    """Use LLM to synthesize a coherent recommendation from survivors.
+
+    Falls back to ranked_alternatives if no LLM client is available.
+    """
+    if llm_client is None:
+        logger.warning(
+            "llm_synthesize requested but no LLM client available; "
+            "falling back to ranked_alternatives"
+        )
+        return _reduce_ranked_alternatives(survivors)
+
+    from delibera.llm.base import LLMMessage, LLMRequest
+    from delibera.llm.prompts import (
+        build_synthesizer_system_prompt,
+        build_synthesizer_user_prompt,
+    )
+
+    # Sort survivors by score descending
+    ranked = sorted(
+        survivors,
+        key=lambda s: (-s.artifact.get("score", 0.0), s.label),
+    )
+
+    # Build survivor data for the prompt
+    survivor_data = []
+    for s in ranked:
+        survivor_data.append(
+            {
+                "label": s.label,
+                "score": s.artifact.get("score", 0.0),
+                "recommendation": s.artifact.get("recommendation", s.label),
+                "rationale": s.artifact.get("rationale", []),
+                "pros": s.artifact.get("pros", []),
+                "cons": s.artifact.get("cons", []),
+            }
+        )
+
+    system_prompt = build_synthesizer_system_prompt()
+    user_prompt = build_synthesizer_user_prompt(
+        question=question,
+        survivors=survivor_data,
+    )
+
+    request = LLMRequest(
+        model="",
+        messages=[
+            LLMMessage(role="system", content=system_prompt),
+            LLMMessage(role="user", content=user_prompt),
+        ],
+        temperature=0.2,
+        max_output_tokens=800,
+        response_format="json",
+        metadata={"role": "synthesizer", "step_id": "reduce"},
+    )
+
+    try:
+        response = llm_client.generate(request)
+        parsed = response.parsed_json or {}
+    except Exception:
+        logger.exception("LLM synthesis failed; falling back to ranked_alternatives")
+        return _reduce_ranked_alternatives(survivors)
+
+    # Collect all pros/cons and compute average score
+    all_pros: list[str] = []
+    all_cons: list[str] = []
+    total_score = 0.0
+    for s in survivors:
+        all_pros.extend(s.artifact.get("pros", []))
+        all_cons.extend(s.artifact.get("cons", []))
+        total_score += s.artifact.get("score", 0.0)
+    avg_score = total_score / len(survivors) if survivors else 0.0
+
+    recommendation = parsed.get("recommendation", "")
+    if not recommendation:
+        # LLM returned empty — fall back
+        return _reduce_ranked_alternatives(survivors)
+
+    return {
+        "merged_from": [s.label for s in ranked],
+        "proposal": recommendation,
+        "recommendation": recommendation,
+        "summary": parsed.get("summary", "LLM-synthesized recommendation."),
+        "pros": all_pros,
+        "cons": all_cons,
+        "rationale": parsed.get("rationale", []),
+        "score": avg_score,
+        "key_tradeoffs": parsed.get("key_tradeoffs", []),
+    }
 
 
 def finalize(state: RunState, merged_node: Node) -> dict[str, Any]:
