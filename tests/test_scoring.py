@@ -25,11 +25,11 @@ class TestScoreWeights:
         """Test that default weights are created correctly."""
         weights = create_default_weights()
 
-        assert weights.evidence_coverage == 1.0
-        assert weights.evidence_count == 0.2
+        assert weights.evidence_coverage == 3.0
+        assert weights.evidence_count == 0.4
         assert weights.weak_claims == -0.3
-        assert weights.unsupported_claims == -1.0
-        assert weights.blocking_objections == -2.0
+        assert weights.unsupported_claims == -0.5
+        assert weights.blocking_objections == -1.0
 
     def test_to_dict(self) -> None:
         """Test conversion to dictionary."""
@@ -63,9 +63,9 @@ class TestScoreWeights:
         assert weights.weak_claims == -0.8
 
         # Default values for unprovided
-        assert weights.evidence_count == 0.2
-        assert weights.unsupported_claims == -1.0
-        assert weights.blocking_objections == -2.0
+        assert weights.evidence_count == 0.4
+        assert weights.unsupported_claims == -0.5
+        assert weights.blocking_objections == -1.0
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
         """Test that unknown keys are ignored."""
@@ -238,8 +238,8 @@ class TestComputeScore:
 
         score = compute_score(metrics, weights)
 
-        # 1.0 * 1.0 + 2.0 * 0.2 + 0 * -0.3 + 0 * -1.0 + 0 * -2.0 = 1.4
-        assert score == pytest.approx(1.4)
+        # 1.0 * 3.0 + 2.0 * 0.4 + 0 * -0.3 + 0 * -0.5 + 0 * -1.0 = 3.8
+        assert score == pytest.approx(3.8)
 
     def test_score_with_penalties(self) -> None:
         """Test score computation with penalties for bad claims."""
@@ -254,9 +254,9 @@ class TestComputeScore:
 
         score = compute_score(metrics, weights)
 
-        # 0.5 * 1.0 + 1.0 * 0.2 + 2.0 * -0.3 + 1.0 * -1.0 + 1.0 * -2.0
-        # = 0.5 + 0.2 - 0.6 - 1.0 - 2.0 = -2.9
-        assert score == pytest.approx(-2.9)
+        # 0.5 * 3.0 + 1.0 * 0.4 + 2.0 * -0.3 + 1.0 * -0.5 + 1.0 * -1.0
+        # = 1.5 + 0.4 - 0.6 - 0.5 - 1.0 = -0.2
+        assert score == pytest.approx(-0.2)
 
     def test_score_with_custom_weights(self) -> None:
         """Test score computation with custom weights."""

@@ -286,6 +286,12 @@ def run(
         use_llm_refiner = True
         use_llm_validator = True
 
+    # Auto-upgrade retrieval method to web when LLM researcher is active
+    # and user hasn't explicitly chosen a non-keyword method
+    if use_llm_researcher and retrieval_method == "keyword":
+        retrieval_method = "web"
+        click.echo("Auto-enabled web retrieval for LLM researcher.")
+
     # Initialize LLM client if using any LLM-backed agent
     llm_client = None
     any_llm = (

@@ -455,7 +455,7 @@ class RedTeamStub:
     """Stub red team agent that raises objections deterministically.
 
     Examines node artifact and ledger to identify issues:
-    1. If any inference claims are weak after validation, create blocking objection
+    1. If any inference claims are weak after validation, create nonblocking objection
     2. If no evidence exists, create blocking objection targeting artifact
     3. Otherwise, create one nonblocking objection for tradeoff consideration
 
@@ -488,11 +488,13 @@ class RedTeamStub:
         ]
 
         if weak_inference_claims:
-            # Create blocking objection targeting first weak inference claim
+            # Create nonblocking objection targeting first weak inference claim.
+            # Weak claims are expected when evidence is incomplete — they are
+            # not severe enough to warrant blocking the deliberation.
             first_weak = weak_inference_claims[0]
             target = first_weak.get("claim_id", "artifact")
             rationale = "Inference claim is weak; provide evidence or revise."
-            severity = "blocking"
+            severity = "nonblocking"
 
             obj_id = self._make_objection_id(node_id, target, severity, rationale)
             objections.append(

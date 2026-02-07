@@ -106,13 +106,16 @@ def validate_claims(
 ) -> ClaimCheckReport:
     """Validate claims based on type and available evidence.
 
-    Validation rules (PR #7):
+    Validation rules:
     - plan claims -> supported (no evidence required)
     - value claims -> supported (no evidence required)
     - fact claims -> supported if evidence contains claim keywords,
                      unsupported otherwise
-    - inference claims -> supported if evidence exists AND no unsupported facts,
+    - inference claims -> supported if own evidence keyword match exists,
                           weak otherwise
+
+    Each claim is evaluated independently — an unsupported fact does not
+    cause all inferences to become weak.
 
     Updates claim.status in-place and returns a summary report.
     Also computes support_relations linking claims to evidence.
@@ -130,8 +133,7 @@ def validate_claims(
     details: list[dict[str, Any]] = []
     support_relations: dict[str, list[str]] = {}
 
-    # First pass: validate fact, plan, and value claims
-    fact_results: dict[str, ClaimStatus] = {}
+    # Validate all claims
     for claim in claims:
         if claim.claim_type == ClaimType.PLAN:
             # Plan claims are automatically supported
@@ -151,29 +153,17 @@ def validate_claims(
             else:
                 claim.status = ClaimStatus.UNSUPPORTED
                 unsupported += 1
-            fact_results[claim.claim_id] = claim.status
-        # Skip inference claims for now
-
-    # Count unsupported facts for inference validation
-    unsupported_facts = sum(
-        1 for status in fact_results.values() if status == ClaimStatus.UNSUPPORTED
-    )
-
-    # Second pass: validate inference claims
-    for claim in claims:
-        if claim.claim_type == ClaimType.INFERENCE:
-            # Inference: supported if evidence exists AND no unsupported facts
-            if len(evidence) > 0 and unsupported_facts == 0:
+        elif claim.claim_type == ClaimType.INFERENCE:
+            # Inference: supported if its own evidence match exists
+            supporting_ids = _find_supporting_evidence(claim, evidence)
+            if supporting_ids:
                 claim.status = ClaimStatus.SUPPORTED
                 supported += 1
-                # For inference claims, find supporting evidence too
-                supporting_ids = _find_supporting_evidence(claim, evidence)
-                if supporting_ids:
-                    support_relations[claim.claim_id] = supporting_ids
+                support_relations[claim.claim_id] = supporting_ids
             else:
                 claim.status = ClaimStatus.WEAK
                 weak += 1
-        elif claim.claim_type not in (ClaimType.PLAN, ClaimType.VALUE, ClaimType.FACT):
+        else:
             # Fallback for any unknown type
             claim.status = ClaimStatus.UNSUPPORTED
             unsupported += 1

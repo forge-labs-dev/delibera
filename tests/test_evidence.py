@@ -287,8 +287,8 @@ class TestValidationUsesEvidence:
         assert claim.status == ClaimStatus.UNSUPPORTED
         assert report.unsupported == 1
 
-    def test_inference_supported_with_evidence_and_no_unsupported_facts(self) -> None:
-        """Test inference claims are supported when evidence exists and all facts supported."""
+    def test_inference_supported_with_matching_evidence(self) -> None:
+        """Test inference claims are supported when own evidence keyword matches."""
         from delibera.epistemics.models import Claim
 
         fact = Claim(
@@ -300,7 +300,7 @@ class TestValidationUsesEvidence:
         )
         inference = Claim(
             claim_id="inf_1",
-            text="Therefore UV would improve our workflow",
+            text="Therefore faster installation speed improves workflow",
             claim_type=ClaimType.INFERENCE,
             confidence=0.8,
             owner="proposer",
@@ -321,8 +321,8 @@ class TestValidationUsesEvidence:
         assert inference.status == ClaimStatus.SUPPORTED
         assert report.supported == 2
 
-    def test_inference_weak_when_facts_unsupported(self) -> None:
-        """Test inference claims are weak when facts are unsupported."""
+    def test_inference_weak_when_no_matching_evidence(self) -> None:
+        """Test inference claims are weak when no evidence keyword matches."""
         from delibera.epistemics.models import Claim
 
         fact = Claim(
