@@ -4,7 +4,7 @@ This document outlines the current state and planned next steps for Delibera.
 
 ## Current State (v0.1.0)
 
-The core engine is functional with 411 tests passing. All phases of the deliberation loop are implemented: plan, expand, propose, research, claim-check, red-team, score, prune, reduce, refine, and finalize. The system runs end-to-end with stub agents or with LLM-backed proposers (Gemini).
+The core engine is functional with 513 tests passing. All phases of the deliberation loop are implemented: plan, expand, propose, research, claim-check, red-team, score, prune, reduce, refine, and finalize. The system runs end-to-end with stub agents or with LLM-backed agents (Gemini) for all roles.
 
 ### Completed
 
@@ -13,7 +13,8 @@ The core engine is functional with 411 tests passing. All phases of the delibera
 - Epistemic layer (claims, evidence, objections, validation, support linking)
 - Multi-source evidence retrieval (keyword, embedding, web, hybrid)
 - Evidence verification for web results (fetch, LLM, cross-reference)
-- LLM integration with Gemini (proposer, embeddings, web grounding)
+- LLM integration with Gemini for all agent roles (planner, proposer, researcher, red-teamer, refiner, validator)
+- LLM-backed claim validator with semantic evidence matching
 - Human-in-the-loop gates (scope, tradeoff, final sign-off)
 - Tool system with policy engine and built-in tools
 - Complete tracing and deterministic replay
@@ -23,42 +24,21 @@ The core engine is functional with 411 tests passing. All phases of the delibera
 
 ### Stub-Only (deterministic, for testing)
 
-- Planner (always produces 3 fixed options)
-- Researcher (uses tool callbacks only)
-- Red-teamer (generates deterministic objections)
-- Refiner (deterministic refinement)
+- All agent roles have stub fallbacks for deterministic testing without API keys
 
 ---
 
 ## Next Steps
 
-### Priority 1: LLM-Backed Agents
+### Priority 1: LLM-Backed Agents (COMPLETED)
 
-Replace remaining stub agents with LLM-backed implementations. The proposer already works with Gemini; the same pattern should extend to other roles.
+All stub agents replaced with LLM-backed implementations using Gemini, with stub fallback on failure.
 
-**LLM Planner**
-- Generate contextual branch labels from the question (not fixed 3 options)
-- Use structured JSON output with question analysis, branch labels, and rationale
-- Fall back to PlannerStub on failure
-- This is the highest-impact change: better planning means better deliberation
-
-**LLM Researcher**
-- Use LLM to formulate search queries from the proposal context
-- Synthesize retrieved evidence into structured summaries
-- Decide which retrieval method to use based on query type
-- Currently the researcher uses tool callbacks; an LLM version would be smarter about what to search for
-
-**LLM Red-Teamer**
-- Generate meaningful objections based on actual proposal content
-- Classify severity (blocking vs. non-blocking) with reasoning
-- Identify logical gaps, unsupported claims, and risks
-- The stub currently produces generic objections; LLM would find real weaknesses
-
-**LLM Refiner**
-- Address objections and improve proposals iteratively
-- Incorporate new evidence from research rounds
-- Track which objections were addressed vs. accepted
-- The stub currently just copies the proposal; LLM would actually refine
+- **LLM Planner** - Generates contextual branch labels from the question
+- **LLM Proposer** - Generates structured proposals with claims and evidence
+- **LLM Researcher** - Formulates search queries and executes via retriever
+- **LLM Red-Teamer** - Generates meaningful objections with severity classification
+- **LLM Refiner** - Addresses objections and improves proposals iteratively
 
 ### Priority 2: Additional LLM Providers
 
@@ -79,20 +59,19 @@ Currently only Gemini is supported. Adding more providers increases accessibilit
 - Useful for testing and environments without API access
 - Lower quality but zero cost and full privacy
 
-### Priority 3: Improved Claim Validation
+### Priority 3: Improved Claim Validation (COMPLETED)
 
-The current claim validation is heuristic-based (keyword matching). LLM-backed validation would be more accurate.
+LLM-backed claim validation replaces keyword-matching heuristic with semantic understanding.
 
-**LLM Claim Validator**
-- Use LLM to assess whether evidence actually supports a claim
-- Score confidence of support relationship (not just binary)
-- Detect contradictions between claims and evidence
-- Identify claims that need additional evidence
-
-**Semantic Evidence Matching**
-- Use embeddings to match claims to evidence (not just keyword overlap)
-- Rank evidence by relevance to specific claims
-- Handle paraphrasing and indirect support
+- **LLM Claim Validator** - Uses LLM to semantically assess claim-evidence support
+  - Scores confidence of support relationship (not just binary)
+  - Detects contradictions between claims and evidence
+  - Identifies claims that need additional evidence
+  - Provides reasoning for each assessment
+  - Falls back to heuristic validation on LLM error
+- **Semantic Evidence Matching** - LLM evaluates semantic support, not just keyword overlap
+  - Handles paraphrasing and indirect support
+  - Ranks evidence by relevance via confidence scoring
 
 ### Priority 4: Protocol Enhancements
 

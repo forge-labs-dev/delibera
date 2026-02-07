@@ -521,3 +521,141 @@ def build_refiner_user_prompt(
     parts.append("\nImprove this proposal by addressing the weaknesses. Output JSON only.")
 
     return "\n".join(parts)
+
+
+# JSON schema for Claim Validator output
+VALIDATOR_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "assessments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_id": {
+                        "type": "string",
+                        "description": "The ID of the claim being assessed",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["supported", "weak", "unsupported", "contradicted"],
+                        "description": "Assessment of evidence support",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "description": "Confidence in the support relationship",
+                    },
+                    "supporting_evidence_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "IDs of evidence that support this claim",
+                    },
+                    "contradicting_evidence_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "IDs of evidence that contradict this claim",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of the assessment",
+                    },
+                    "needs_more_evidence": {
+                        "type": "boolean",
+                        "description": "Whether this claim needs additional evidence",
+                    },
+                },
+                "required": [
+                    "claim_id",
+                    "status",
+                    "confidence",
+                    "supporting_evidence_ids",
+                    "reasoning",
+                ],
+            },
+            "description": "Per-claim assessments",
+        },
+    },
+    "required": ["assessments"],
+}
+
+
+def build_validator_system_prompt() -> str:
+    """Build the system prompt for the Claim Validator agent.
+
+    Returns:
+        The system prompt string.
+    """
+    return (
+        "You are a claim validator for a structured deliberation system.\n"
+        "\n"
+        "Your task is to assess whether available evidence supports, "
+        "weakens, or contradicts each claim.\n"
+        "\n"
+        "RULES:\n"
+        "1. Output ONLY valid JSON. No markdown, no explanations, no code blocks.\n"
+        "2. Assess EVERY claim provided.\n"
+        "3. For each claim, determine:\n"
+        "   - supported: Evidence clearly and directly supports the claim\n"
+        "   - weak: Evidence provides only indirect or partial support\n"
+        "   - unsupported: No evidence supports the claim\n"
+        "   - contradicted: Evidence directly contradicts the claim\n"
+        "4. Match evidence semantically, not just by keyword overlap.\n"
+        "5. Consider paraphrasing and indirect support.\n"
+        "6. Score confidence from 0.0 (no support) to 1.0 (strong support).\n"
+        "7. Note which claims need additional evidence.\n"
+        "8. Plan and value claims that don't require evidence should be "
+        'marked as "supported" with confidence 1.0.\n'
+        "\n"
+        "OUTPUT FORMAT (JSON only):\n"
+        "{\n"
+        '  "assessments": [\n'
+        "    {\n"
+        '      "claim_id": "id",\n'
+        '      "status": "supported|weak|unsupported|contradicted",\n'
+        '      "confidence": 0.0-1.0,\n'
+        '      "supporting_evidence_ids": ["ev_id1", ...],\n'
+        '      "contradicting_evidence_ids": ["ev_id2", ...],\n'
+        '      "reasoning": "brief explanation",\n'
+        '      "needs_more_evidence": true/false\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+
+def build_validator_user_prompt(
+    claims: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+) -> str:
+    """Build the user prompt for the Claim Validator agent.
+
+    Args:
+        claims: List of claim dicts with claim_id, claim_type, text.
+        evidence: List of evidence dicts with evidence_id, source, excerpt.
+
+    Returns:
+        The user prompt string.
+    """
+    parts = ["CLAIMS TO VALIDATE:"]
+
+    for c in claims[:15]:
+        cid = c.get("claim_id", "?")
+        ctype = c.get("claim_type", "?")
+        text = str(c.get("text", ""))[:300]
+        parts.append(f"  [{cid}] ({ctype}): {text}")
+
+    if evidence:
+        parts.append("\nAVAILABLE EVIDENCE:")
+        for e in evidence[:10]:
+            eid = e.get("evidence_id", "?")
+            source = str(e.get("source", "?"))[:100]
+            excerpt = str(e.get("excerpt", ""))[:300]
+            parts.append(f"  [{eid}] (source: {source}): {excerpt}")
+    else:
+        parts.append("\nAVAILABLE EVIDENCE: None")
+
+    parts.append("\nAssess whether the evidence supports each claim. Output JSON only.")
+
+    return "\n".join(parts)

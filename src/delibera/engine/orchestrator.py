@@ -32,6 +32,7 @@ from delibera.epistemics.models import (
     ObjectionSeverity,
     ObjectionStatus,
 )
+from delibera.epistemics.validate import ClaimCheckReport
 from delibera.gates import (
     GATE_ALLOWED_ACTIONS,
     AutoApproveGateHandler,
@@ -99,6 +100,7 @@ class Engine:
         use_llm_researcher: bool = False,
         use_llm_redteam: bool = False,
         use_llm_refiner: bool = False,
+        use_llm_validator: bool = False,
         llm_model: str | None = None,
         llm_temperature: float = 0.2,
         llm_max_output_tokens: int = 800,
@@ -124,6 +126,7 @@ class Engine:
             use_llm_researcher: Whether to use LLM-backed researcher. Defaults to False.
             use_llm_redteam: Whether to use LLM-backed red-teamer. Defaults to False.
             use_llm_refiner: Whether to use LLM-backed refiner. Defaults to False.
+            use_llm_validator: Whether to use LLM-backed claim validator. Defaults to False.
             llm_model: Model name for LLM (if different from client default).
             llm_temperature: Temperature for LLM calls. Defaults to 0.2.
             llm_max_output_tokens: Max output tokens for LLM. Defaults to 800.
@@ -147,6 +150,7 @@ class Engine:
         self._use_llm_researcher = use_llm_researcher
         self._use_llm_redteam = use_llm_redteam
         self._use_llm_refiner = use_llm_refiner
+        self._use_llm_validator = use_llm_validator
         self._llm_model = llm_model
         self._llm_temperature = llm_temperature
         self._llm_max_output_tokens = llm_max_output_tokens
@@ -607,7 +611,7 @@ class Engine:
 
             # CLAIM_CHECK: Extract and validate claims for each branch
             for child in children:
-                report = operators.validate(tree, child.node_id, "proposer")
+                report = self._validate_claims(tree, child.node_id, "proposer", run_id, writer)
                 writer.emit(
                     TraceEvent(
                         event_type="claim_validation_report",
@@ -1318,6 +1322,107 @@ class Engine:
             tool=tool_callback,
         )
 
+    def _validate_claims(
+        self,
+        tree: DeliberationTree,
+        node_id: str,
+        owner: str,
+        run_id: str,
+        writer: TraceWriter,
+    ) -> ClaimCheckReport:
+        """Extract and validate claims, optionally using LLM validator.
+
+        When use_llm_validator is enabled, uses the LLM to semantically
+        assess claim-evidence support instead of keyword matching.
+        Falls back to heuristic validation on LLM error.
+
+        Args:
+            tree: The deliberation tree.
+            node_id: The node to validate.
+            owner: The role that produced the artifact.
+            run_id: The current run ID.
+            writer: The trace writer.
+
+        Returns:
+            ClaimCheckReport with validation results.
+        """
+        if not (self._use_llm_validator and self._llm_client is not None):
+            return operators.validate(tree, node_id, owner)
+
+        from delibera.agents.llm_validator import ClaimValidatorLLM
+        from delibera.epistemics.extract import extract_claims
+
+        node = tree.get_node(node_id)
+
+        # Extract claims (same as heuristic path)
+        claims = extract_claims(node_id, node.artifact, owner)
+        node.ledger.claims = claims
+
+        # Use LLM validator
+        validator = ClaimValidatorLLM(
+            llm_client=self._llm_client,
+            model=self._llm_model,
+            temperature=0.1,
+            max_output_tokens=1500,
+        )
+
+        writer.emit(
+            TraceEvent(
+                event_type="llm_call_requested",
+                run_id=run_id,
+                payload={
+                    "node_id": node_id,
+                    "role": "validator",
+                    "step": "CLAIM_CHECK",
+                    "provider": "gemini",
+                    "model": self._llm_model or "default",
+                },
+            )
+        )
+
+        try:
+            report = validator.validate(claims, node.ledger.evidence)
+
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_succeeded",
+                    run_id=run_id,
+                    payload={
+                        "node_id": node_id,
+                        "role": "validator",
+                        "step": "CLAIM_CHECK",
+                        "output_length": len(str(report.details)),
+                        "llm_generated": True,
+                    },
+                )
+            )
+
+            # Record support relations in ledger
+            for claim_id, evidence_ids in report.support_relations.items():
+                for evidence_id in evidence_ids:
+                    node.ledger.link_support(claim_id, evidence_id)
+
+            return report
+
+        except Exception as e:
+            from delibera.llm.redaction import redact_text
+
+            writer.emit(
+                TraceEvent(
+                    event_type="llm_call_failed",
+                    run_id=run_id,
+                    payload={
+                        "node_id": node_id,
+                        "role": "validator",
+                        "step": "CLAIM_CHECK",
+                        "error_type": type(e).__name__,
+                        "error_message": redact_text(str(e))[:200],
+                    },
+                )
+            )
+            # Fall back to heuristic validation
+            return operators.validate(tree, node_id, owner)
+
     def _merge_evidence_to_ledger(
         self,
         tree: DeliberationTree,
@@ -1647,7 +1752,7 @@ class Engine:
             )
 
             # Re-validate claims after refinement
-            report = operators.validate(tree, merged_node.node_id, "refiner")
+            report = self._validate_claims(tree, merged_node.node_id, "refiner", run_id, writer)
             writer.emit(
                 TraceEvent(
                     event_type="claim_validation_report",

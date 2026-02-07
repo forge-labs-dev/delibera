@@ -136,6 +136,12 @@ def version() -> None:
     help="Use LLM-backed refiner for intelligent proposal improvement. Requires GEMINI_API_KEY.",
 )
 @click.option(
+    "--use-llm-validator",
+    is_flag=True,
+    default=False,
+    help="Use LLM-backed claim validator for semantic evidence matching. Requires GEMINI_API_KEY.",
+)
+@click.option(
     "--use-all-llm",
     is_flag=True,
     default=False,
@@ -194,6 +200,7 @@ def run(
     use_llm_researcher: bool,
     use_llm_redteam: bool,
     use_llm_refiner: bool,
+    use_llm_validator: bool,
     use_all_llm: bool,
     llm_provider: str,
     llm_model: str | None,
@@ -270,6 +277,7 @@ def run(
         use_llm_researcher = True
         use_llm_redteam = True
         use_llm_refiner = True
+        use_llm_validator = True
 
     # Initialize LLM client if using any LLM-backed agent
     llm_client = None
@@ -279,6 +287,7 @@ def run(
         or use_llm_researcher
         or use_llm_redteam
         or use_llm_refiner
+        or use_llm_validator
     )
     if any_llm and llm_provider == "gemini":
         from delibera.llm import GEMINI_API_KEY_ENV, GeminiClient, LLMAuthError
@@ -298,6 +307,8 @@ def run(
                 llm_agents.append("redteam")
             if use_llm_refiner:
                 llm_agents.append("refiner")
+            if use_llm_validator:
+                llm_agents.append("validator")
             click.echo(
                 f"LLM agents enabled: {', '.join(llm_agents)} "
                 f"({llm_provider}, {llm_model or 'default'})"
@@ -351,6 +362,7 @@ def run(
         use_llm_researcher=use_llm_researcher,
         use_llm_redteam=use_llm_redteam,
         use_llm_refiner=use_llm_refiner,
+        use_llm_validator=use_llm_validator,
         llm_model=llm_model,
         llm_temperature=llm_temperature,
         llm_max_output_tokens=llm_max_output_tokens,
