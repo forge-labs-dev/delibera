@@ -178,26 +178,29 @@ Validation produces a **ClaimCheckReport** that updates claim statuses.
 
 ---
 
-### 5.2 Validation rules (v1)
+### 5.2 Validation rules (v2)
+
+Each claim is validated independently — an unsupported fact does not
+cause all inferences to become weak.
 
 For each claim:
 
 - **fact**
   - supported if at least one evidence item exists
-    whose excerpt materially supports the claim
-  - weak if evidence is indirect or partial
+    whose excerpt materially supports the claim (keyword match or LLM semantic assessment)
   - unsupported if no valid evidence exists
 
 - **inference**
-  - supported if underlying facts are supported
-  - weak if based on weak facts
-  - unsupported if based on unsupported facts
+  - supported if its own evidence keyword match exists (per-claim evaluation)
+  - weak if no matching evidence found
 
 - **value**
   - automatically supported (but explicitly marked as value)
 
 - **plan**
   - automatically supported (but may introduce objections)
+
+When LLM validator is enabled (`--use-llm-validator` or `--use-all-llm`), semantic assessment replaces keyword matching — the LLM evaluates whether evidence actually supports, weakens, or contradicts each claim.
 
 Validation rules are intentionally conservative.
 
@@ -255,10 +258,25 @@ Ledger merging is deterministic.
 Epistemic state feeds scoring and convergence.
 
 Common metrics:
-- number of unsupported claims
+- evidence coverage (fraction of fact claims with evidence, 0..1)
+- evidence count (number of evidence items, capped at 5)
 - number of weak claims
-- evidence coverage (fraction of fact claims with evidence)
-- number of unresolved blocking objections
+- number of unsupported claims
+- number of open blocking objections
+- number of open nonblocking objections
+
+These metrics are combined via weighted scoring (v2 defaults):
+
+| Metric | Weight | Effect |
+|--------|--------|--------|
+| evidence_coverage | +3.0 | Strongly rewards supported fact claims |
+| evidence_count | +0.4 | Rewards having evidence |
+| weak_claims | -0.3 | Lightly penalizes |
+| unsupported_claims | -0.5 | Penalizes unsupported claims |
+| blocking_objections | -1.0 | Penalizes blocking objections |
+| nonblocking_objections | -0.2 | Lightly penalizes |
+
+A well-evidenced proposal (coverage=1.0, count=5) scores +5.0 before penalties, giving evidence a realistic chance to counterbalance objections.
 
 These metrics are computed by the engine.
 

@@ -2,16 +2,21 @@
 
 This document outlines the current state and planned next steps for Delibera.
 
-## Current State (v0.1.0)
+## Current State (v0.2.0)
 
-The core engine is functional with 513 tests passing. All phases of the deliberation loop are implemented: plan, expand, propose, research, claim-check, red-team, score, prune, reduce, refine, and finalize. The system runs end-to-end with stub agents or with LLM-backed agents (Gemini) for all roles.
+The core engine is functional with 547 tests passing. All phases of the deliberation loop are implemented: plan, expand, propose, research, claim-check, red-team, score, prune, reduce, refine, and finalize. The system runs end-to-end with stub agents or with LLM-backed agents (Gemini) for all roles.
 
 ### Completed
 
 - Core deliberation engine with 15-phase orchestration
 - Declarative YAML protocol system
-- Epistemic layer (claims, evidence, objections, validation, support linking)
+- Multi-level tree expansion (recursive depth-2+ with sub-plans)
+- Parallel branch execution (ThreadPoolExecutor, thread-safe tracing)
+- Dynamic protocols (conditional expansion, dominance-threshold early termination)
+- Epistemic layer (claims, evidence, objections, per-claim validation, support linking)
+- Balanced scoring weights (evidence counterbalances objections for realistic scores)
 - Multi-source evidence retrieval (keyword, embedding, web, hybrid)
+- Auto-enabled web retrieval when LLM researcher is active
 - Evidence verification for web results (fetch, LLM, cross-reference)
 - LLM integration with Gemini for all agent roles (planner, proposer, researcher, red-teamer, refiner, validator)
 - LLM-backed claim validator with semantic evidence matching
@@ -73,21 +78,13 @@ LLM-backed claim validation replaces keyword-matching heuristic with semantic un
   - Handles paraphrasing and indirect support
   - Ranks evidence by relevance via confidence scoring
 
-### Priority 4: Protocol Enhancements
+### Priority 4: Protocol Enhancements (COMPLETED)
 
-**Multi-Level Tree Expansion**
-- Support deeper trees (current protocols use max_depth=1)
-- Sub-plans within options (e.g., "How to implement Option A?")
-- Risk analysis branches per option
+All protocol enhancements have been implemented.
 
-**Dynamic Protocols**
-- Allow protocols to adapt based on intermediate results
-- Early termination when one option clearly dominates
-- Conditional branches based on claim validation results
-
-**Parallel Branch Execution**
-- Run branch pipelines concurrently (currently sequential)
-- Would significantly speed up deliberation with multiple options
+- **Multi-Level Tree Expansion** — Recursive `_process_level()` supports depth-2+ trees with sub-plans per option. LLM proposer generates `sub_branches` for automatic sub-expansion.
+- **Dynamic Protocols** — `ExpandSpec.condition` enables conditional expansion based on ledger metrics. `ConvergenceSpec.dominance_threshold` terminates early when one option clearly dominates.
+- **Parallel Branch Execution** — `ThreadPoolExecutor` with configurable `max_parallel_branches`. Thread-safe `TraceWriter` using `threading.Lock`. Achieves ~3x speedup with real LLM agents.
 
 ### Priority 5: Persistence and Integration
 

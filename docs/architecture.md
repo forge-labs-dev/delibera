@@ -52,9 +52,12 @@ Responsibilities:
   - Prune
   - Reduce
   - Converge
+- supports **multi-level tree expansion** via recursive `_process_level()`
+- supports **parallel branch execution** via `ThreadPoolExecutor`
+- evaluates **dynamic protocol conditions** (conditional expansion, dominance threshold)
 - enforces protocol order and budgets
 - triggers user gates
-- records trace events
+- records trace events (thread-safe)
 
 Non-responsibilities:
 - generating content
@@ -123,13 +126,21 @@ The LLM layer provides a pluggable interface for language model access.
 Components:
 - **LLMClient** protocol — `generate(LLMRequest) -> LLMResponse`
 - **GeminiClient** — Google Gemini implementation (SDK + HTTP fallback)
-- **Prompt templates** — Structured prompts for proposer and other roles
+- **Prompt templates** — Structured prompts for all agent roles
 - **Redaction** — Sensitive data filtering before sending to LLMs
+
+LLM-backed agents:
+- **LLM Planner** — Generates contextual branch labels from the question
+- **LLM Proposer** — Generates structured proposals with claims, evidence, and sub-branches for depth-2 expansion
+- **LLM Researcher** — Formulates search queries and executes via retriever (web search auto-enabled)
+- **LLM Red-Teamer** — Generates meaningful objections with severity classification
+- **LLM Refiner** — Addresses objections and improves proposals iteratively
+- **LLM Validator** — Semantic claim-evidence matching (replaces keyword heuristic)
 
 LLM calls are:
 - always traced (request metadata, response, latency, token usage)
 - never made during replay or validation
-- opt-in via `--use-llm-proposer` CLI flag
+- opt-in via `--use-all-llm` or per-role flags (e.g., `--use-llm-proposer`)
 - gracefully degraded (falls back to stubs on failure)
 
 ---
@@ -327,7 +338,12 @@ delibera/
 ├── agents/
 │   ├── base.py              # Agent protocol
 │   ├── stub.py              # Deterministic stubs (planner, proposer, researcher, redteam, refiner)
-│   └── llm_proposer.py      # LLM-backed proposer
+│   ├── llm_planner.py       # LLM-backed planner
+│   ├── llm_proposer.py      # LLM-backed proposer (with sub_branches for multi-level trees)
+│   ├── llm_researcher.py    # LLM-backed researcher (query generation + retriever)
+│   ├── llm_redteam.py       # LLM-backed red-teamer
+│   ├── llm_refiner.py       # LLM-backed refiner
+│   └── llm_validator.py     # LLM-backed claim validator (semantic matching)
 ├── epistemics/
 │   ├── models.py            # Claim, Evidence, Objection dataclasses
 │   ├── extract.py           # Extract claims from artifacts

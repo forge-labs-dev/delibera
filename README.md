@@ -10,7 +10,7 @@ Delibera is an open-source framework that makes multi-agent reasoning **structur
 |---------|-------------|
 | **Engine** | Central orchestrator that controls tree structure and termination. Agents propose; the engine decides. |
 | **Protocol** | Declarative YAML spec defining expansion rules, branch pipelines, pruning, and convergence criteria. |
-| **Epistemics** | Explicit tracking of claims, evidence, and objections. Fact claims require evidence; inferences must follow from supported facts. |
+| **Epistemics** | Explicit tracking of claims, evidence, and objections. Fact claims require evidence; inferences are validated per-claim against evidence. |
 | **Retrieval** | Multi-source evidence gathering: keyword search, semantic embeddings, web search (Gemini grounding), and hybrid fusion. |
 | **Verification** | Evidence verification layer that validates web search results by fetching URLs, LLM fact-checking, or cross-referencing. |
 | **Gates** | Structured human-in-the-loop checkpoints for scope clarification, tradeoffs, and final approval. |
@@ -43,29 +43,37 @@ delibera run --question "Should we adopt uv?" --auto-approve-gates
 delibera run --question "Your question" --protocol protocols/tree_v1.yaml
 ```
 
-### Run with LLM-Backed Proposer
+### Run with LLM-Backed Agents
 
-To use an LLM for generating proposals (instead of deterministic stubs):
+To use LLMs for all agent roles (planner, proposer, researcher, red-teamer, refiner, validator):
 
 ```bash
 # Set your Gemini API key
 export GEMINI_API_KEY="your-api-key"
 
-# Run with LLM proposer
-delibera run --question "Should we adopt uv?" --use-llm-proposer --auto-approve-gates
+# Run with all LLM agents (auto-enables web evidence retrieval)
+delibera run --question "Should we adopt uv?" --use-all-llm --no-gates
+
+# Run individual LLM agents
+delibera run --question "Your question" --use-llm-proposer --use-llm-researcher --auto-approve-gates
+
+# Parallel branch execution for faster deliberation
+delibera run --question "Your question" --use-all-llm --max-parallel-branches 3 --no-gates
 
 # Specify model and parameters
 delibera run --question "Your question" \
-  --use-llm-proposer \
+  --use-all-llm \
   --llm-model gemini-2.0-flash \
   --llm-temperature 0.3 \
-  --auto-approve-gates
+  --no-gates
 ```
 
 **Note:** LLM mode requires the `google-generativeai` package. Install with:
 ```bash
 pip install delibera[llm]
 ```
+
+When `--use-all-llm` (or `--use-llm-researcher`) is set, web retrieval is auto-enabled — the LLM researcher generates search queries and Gemini Google Search grounding retrieves real evidence.
 
 Replay and inspection work identically whether the run used LLM or stubs — replay never re-invokes the LLM.
 
@@ -182,7 +190,7 @@ convergence:
 src/delibera/
   engine/        Orchestrator, operators, tree, run state
   protocol/      Declarative specs, YAML loader, interpreter
-  agents/        Stubs (planner, proposer, researcher, redteam, refiner) + LLM proposer
+  agents/        Stubs + LLM-backed agents (planner, proposer, researcher, redteam, refiner, validator)
   epistemics/    Claims, evidence, objections, ledgers, validation
   retrieval/     Keyword, embedding, web, hybrid retrievers + verification
   llm/           LLM client protocol, Gemini provider, prompts, redaction
@@ -221,7 +229,7 @@ See the [docs/](docs/README.md) directory for detailed documentation:
 # Install dev dependencies
 uv sync
 
-# Run tests (411 tests)
+# Run tests (547 tests)
 uv run pytest
 
 # Type checking (strict mode)
@@ -233,29 +241,32 @@ uv run ruff check src/ tests/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor guidelines.
 
-## Current Status (v0.1.0)
+## Current Status (v0.2.0)
 
 ### What's implemented
 
 - Core deliberation engine with 15-phase orchestration loop
 - Declarative YAML protocol system with expansion, pruning, convergence
-- Epistemic layer: claims, evidence, objections with validation and support linking
+- **Multi-level tree expansion** — recursive depth-2+ trees with sub-plans per option
+- **Parallel branch execution** — `ThreadPoolExecutor` with configurable `--max-parallel-branches`
+- **Dynamic protocols** — conditional expansion based on metrics, dominance-threshold early termination
+- Epistemic layer: claims, evidence, objections with per-claim validation and support linking
 - Multi-source evidence retrieval (keyword, embedding, web, hybrid with RRF)
+- **Auto-enabled web retrieval** when LLM researcher is active
 - Evidence verification for web results (fetch, LLM, cross-reference)
-- LLM integration with Gemini (proposer agent, embeddings, web grounding)
+- **LLM integration with Gemini for all agent roles** (planner, proposer, researcher, red-teamer, refiner, validator)
+- **LLM claim validator** with semantic evidence matching (replaces keyword heuristic)
+- **Balanced scoring weights** — evidence can counterbalance objections for realistic scores
 - Human-in-the-loop gates (scope, tradeoff, final sign-off)
 - Tool system with policy engine, routing, and built-in tools
-- Complete tracing and deterministic replay
+- Complete tracing and deterministic replay (thread-safe for parallel execution)
 - Inspection and Markdown report generation
 - Evaluation harness with suite runner and metrics
 - CLI with extensive configuration options
 
-### What's still stub-only
+### Stub fallbacks
 
-- **Planner** — deterministic 3-option labels (no LLM planner yet)
-- **Researcher** — uses tool callbacks (no LLM researcher yet)
-- **Red Team** — deterministic objections (no LLM red-teamer yet)
-- **Refiner** — deterministic refinement (no LLM refiner yet)
+All agent roles have deterministic stub implementations for testing without API keys. LLM agents fall back to stubs on failure.
 
 ## Roadmap
 

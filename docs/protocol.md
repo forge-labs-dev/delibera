@@ -100,6 +100,8 @@ Protocol steps are named actions that map to operators:
 | `PLAN` | Work | Initial planning using Planner role |
 | `EXPAND` | Expand | Create alternative branches |
 | `PROPOSE` | Work | Generate proposals using Proposer role |
+| `RESEARCH` | Work | Gather evidence using Researcher role |
+| `CLAIM_CHECK` | Validate | Validate claims against evidence |
 | `REDTEAM` | Work | Challenge proposals using Skeptic role |
 | `VALIDATE` | Validate | Check claims against evidence |
 | `SCORE` | Score | Compute branch quality scores |
@@ -173,14 +175,24 @@ The engine enforces all constraints.
 After EXPAND, each branch executes the **branch pipeline** independently.
 
 A branch pipeline is an ordered list of steps, typically including:
-- WORK (e.g. PROPOSE, REDTEAM)
+- WORK (e.g. PROPOSE, RESEARCH, REDTEAM)
 - VALIDATE (claim checking)
 - SCORE
 
 Branch pipelines:
 - operate on a single node
 - do not modify sibling branches
-- may be parallelized
+- are parallelized when `max_parallel_branches > 1` (via `ThreadPoolExecutor`)
+
+### 6.1 Parallel branch execution
+
+Branch pipelines can be executed concurrently for significant speedup:
+
+```bash
+delibera run --question "Your question" --max-parallel-branches 3
+```
+
+Parallelism is implemented via `ThreadPoolExecutor`. Each branch runs its full pipeline independently. The `TraceWriter` is thread-safe (uses `threading.Lock`) to ensure correct event ordering. With real LLM agents, parallel execution achieves ~3x speedup.
 
 ---
 
@@ -264,7 +276,41 @@ Refinement loops are:
 
 ---
 
-## 11. Convergence
+## 11. Dynamic protocols
+
+Protocols can adapt based on intermediate results.
+
+### 11.1 Conditional expansion
+
+Expand rules can include a `condition` that is evaluated against the node's ledger metrics before expansion occurs:
+
+```yaml
+expand_rules:
+  - id: expand_sub_options
+    at_step_id: propose
+    child_kind: sub_option
+    max_children: 2
+    depth: 2
+    condition: "evidence_coverage > 0.5"
+```
+
+The condition is evaluated by the interpreter against the node's computed metrics. If the condition is false, expansion is skipped.
+
+### 11.2 Dominance threshold (early termination)
+
+The convergence spec can include a `dominance_threshold` that triggers early termination when the top-scoring option clearly dominates:
+
+```yaml
+convergence:
+  max_rounds: 0
+  dominance_threshold: 2.0
+```
+
+If `top_score / second_score >= dominance_threshold`, the engine overrides `keep_k` to keep only the dominant option during pruning.
+
+---
+
+## 12. Convergence
 
 Protocols must define a **convergence specification**.
 
@@ -278,7 +324,7 @@ Convergence is evaluated **only by the engine**.
 
 ---
 
-## 12. User gates in protocols
+## 13. User gates in protocols
 
 Protocols may specify **user gates** at defined points.
 
@@ -296,7 +342,7 @@ User gates:
 
 ---
 
-## 13. Tree Protocol v1 (reference protocol)
+## 14. Tree Protocol v1 (reference protocol)
 
 Tree Protocol v1 defines a minimal, generic deliberation flow:
 
@@ -382,7 +428,7 @@ gates:
 
 ---
 
-## 14. Protocol invariants
+## 15. Protocol invariants
 
 All protocols must preserve:
 
@@ -396,7 +442,7 @@ Violating any invariant is a protocol error.
 
 ---
 
-## 15. Summary
+## 16. Summary
 
 Protocols in Delibera define **how deliberation proceeds**, not *what agents think*.
 
