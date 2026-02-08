@@ -67,7 +67,7 @@ def validate(tree: DeliberationTree, node_id: str, owner: str) -> ClaimCheckRepo
     node = tree.get_node(node_id)
 
     # Extract claims from artifact
-    claims = extract_claims(node_id, node.artifact, owner)
+    claims = extract_claims(node.artifact, owner)
 
     # Validate claims using ledger evidence
     report = validate_claims(claims, evidence=node.ledger.evidence)
@@ -88,64 +88,55 @@ def prune(
     node_ids: list[str],
     keep_count: int = 2,
     weights: Any | None = None,  # ScoreWeights, import avoided for simplicity
+    rule: str = "epistemic_then_score",
 ) -> tuple[list[str], list[str]]:
-    """Prune weak branches using epistemic quality + weighted score.
+    """Prune weak branches using the configured strategy.
 
-    Pruning priority (deterministic):
-    1. Fewer open blocking objections (ascending)
-    2. Fewer unsupported claims (ascending)
-    3. Fewer weak claims (ascending)
-    4. Higher weighted score (descending)
-    5. Lexicographic tie-break by label (ascending)
+    Strategies:
+    - ``epistemic_then_score``: epistemic quality first, score as tiebreaker.
+      Sort key: (blocking, unsupported, weak, -score, label)
+    - ``score_only``: weighted score first, epistemic quality as tiebreaker.
+      Sort key: (-score, blocking, unsupported, weak, label)
 
     Args:
         tree: The deliberation tree.
         node_ids: IDs of nodes to consider for pruning.
         keep_count: Number of top nodes to keep.
-        weights: Optional ScoreWeights for score computation (uses artifact score).
+        weights: Optional ScoreWeights (unused; score is pre-computed in artifact).
+        rule: Pruning strategy from PruneSpec.rule.
 
     Returns:
         Tuple of (survivor_ids, pruned_ids).
     """
-    # Note: weights parameter is accepted for interface compatibility.
-    # The actual score is pre-computed and stored in node.artifact["score"]
-    # by the orchestrator's SCORE step.
-    _ = weights  # Unused here, score already in artifact
+    _ = weights  # Score already in artifact
 
-    def compute_epistemic_key(node_id: str) -> tuple[int, int, int, float, str]:
-        """Compute sorting key for epistemic-based pruning.
-
-        Returns tuple for sorting where lower is better for counts,
-        higher is better for score.
-        Lexicographic label provides stable, deterministic tie-break.
-        """
+    def _node_metrics(node_id: str) -> tuple[int, int, int, float, str]:
+        """Extract epistemic metrics and score for a node."""
         node = tree.get_node(node_id)
-
-        # Count open blocking objections (highest priority for pruning)
         blocking_count = sum(
             1
             for obj in node.ledger.objections
             if obj.severity == ObjectionSeverity.BLOCKING and obj.status == ObjectionStatus.OPEN
         )
-
-        # Count claims by status
         unsupported = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.UNSUPPORTED)
         weak = sum(1 for c in node.ledger.claims if c.status == ClaimStatus.WEAK)
         score = node.artifact.get("score", 0.0)
+        return (blocking_count, unsupported, weak, score, node.label)
 
-        # Return tuple: (blocking, unsupported, weak, -score, label)
-        # Ascending sort means fewer blocking/unsupported/weak is better,
-        # higher score (negative becomes more negative) is better
-        return (blocking_count, unsupported, weak, -score, node.label)
+    def _key_epistemic_then_score(node_id: str) -> tuple[int, int, int, float, str]:
+        blocking, unsupported, weak, score, label = _node_metrics(node_id)
+        return (blocking, unsupported, weak, -score, label)
 
-    # Sort nodes by epistemic quality
-    sorted_node_ids = sorted(node_ids, key=compute_epistemic_key)
+    def _key_score_only(node_id: str) -> tuple[float, int, int, int, str]:
+        blocking, unsupported, weak, score, label = _node_metrics(node_id)
+        return (-score, blocking, unsupported, weak, label)
 
-    # Split into survivors and pruned
+    key_fn = _key_score_only if rule == "score_only" else _key_epistemic_then_score
+    sorted_node_ids = sorted(node_ids, key=key_fn)
+
     survivor_ids = sorted_node_ids[:keep_count]
     pruned_ids = sorted_node_ids[keep_count:]
 
-    # Update status of pruned nodes
     for node_id in pruned_ids:
         tree.set_status(node_id, "pruned")
 

@@ -115,8 +115,8 @@ class TestResearchAddsEvidence:
                 assert "source" in evidence
                 # Source is relative to evidence root (uv_notes.txt)
                 assert "uv_notes.txt" in evidence["source"]
-                assert "excerpt_length" in evidence
-                assert evidence["excerpt_length"] > 0
+                assert "excerpt" in evidence
+                assert len(evidence["excerpt"]) > 0
                 assert "provenance" in evidence
 
     def test_evidence_in_work_output(self) -> None:
@@ -395,7 +395,7 @@ class TestEvidenceModel:
 
         assert result["evidence_id"] == "ev_123"
         assert result["source"] == "evidence/test.txt"
-        assert result["excerpt_length"] == len("This is a test excerpt with some content")
+        assert result["excerpt"] == "This is a test excerpt with some content"
         assert result["provenance"] == {"node_id": "abc123", "step": "RESEARCH"}
 
 

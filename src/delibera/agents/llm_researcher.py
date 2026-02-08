@@ -115,10 +115,18 @@ class ResearcherLLM:
 
         if self._retriever is not None:
             for q in queries:
+                query_text = q["query"]
                 try:
-                    results = self._retriever.retrieve(q["query"], max_results=3)
+                    results = self._retriever.retrieve(query_text, max_results=3)
                     for r in results:
-                        ev = {"source": r.source, "excerpt": r.excerpt}
+                        ev: dict[str, str] = {
+                            "source": r.source,
+                            "excerpt": r.excerpt,
+                            "query": query_text,
+                        }
+                        title = (r.metadata or {}).get("title", "")
+                        if title:
+                            ev["title"] = title
                         # Deduplicate by source
                         if not any(e["source"] == ev["source"] for e in evidence):
                             evidence.append(ev)
@@ -126,6 +134,10 @@ class ResearcherLLM:
                     notes.append(f"Query failed: {type(e).__name__}")
 
             notes.append(f"Retrieved {len(evidence)} unique evidence items")
+
+            # Generate one-line summaries for all evidence items in a single LLM call
+            if evidence:
+                self._summarize_evidence(evidence, node_id)
         else:
             notes.append("No retriever available; queries generated but not executed")
 
@@ -137,6 +149,52 @@ class ResearcherLLM:
             "step": "RESEARCH",
             "llm_generated": True,
         }
+
+    def _summarize_evidence(
+        self,
+        evidence: list[dict[str, str]],
+        node_id: str,
+    ) -> None:
+        """Generate one-line summaries for all evidence items in a single LLM call.
+
+        Mutates evidence dicts in-place, adding a "summary" key.
+        Silently skips on any error.
+        """
+        # Build numbered list of excerpts for the LLM
+        lines = [
+            "For each evidence excerpt below, write a concise one-line summary "
+            "(max 15 words). Return a JSON object mapping the index to the summary.",
+            'Example: {"0": "Summary of first item", "1": "Summary of second item"}',
+            "",
+        ]
+        for i, ev in enumerate(evidence):
+            excerpt = ev.get("excerpt", "")[:300]
+            lines.append(f"[{i}]: {excerpt}")
+
+        try:
+            request = LLMRequest(
+                model=self._model,
+                messages=[
+                    LLMMessage(role="user", content="\n".join(lines)),
+                ],
+                temperature=0.0,
+                max_output_tokens=300,
+                response_format="json",
+                metadata={
+                    "node_id": node_id,
+                    "role": "researcher",
+                    "step": "SUMMARIZE_EVIDENCE",
+                },
+            )
+            response = self._llm_client.generate(request)
+            summaries = response.parsed_json or {}
+
+            for i, ev in enumerate(evidence):
+                summary = summaries.get(str(i), "")
+                if summary:
+                    ev["summary"] = str(summary)[:150]
+        except Exception:
+            pass  # Non-critical; UI falls back to excerpt
 
     def _extract_queries(
         self,

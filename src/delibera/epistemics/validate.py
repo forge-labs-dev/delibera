@@ -172,6 +172,7 @@ def validate_claims(
     for claim in claims:
         detail: dict[str, Any] = {
             "claim_id": claim.claim_id,
+            "text": claim.text,
             "status": claim.status.value,
             "type": claim.claim_type.value,
             "supporting_evidence_ids": support_relations.get(claim.claim_id, []),

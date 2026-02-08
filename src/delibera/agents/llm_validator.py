@@ -191,6 +191,7 @@ class ClaimValidatorLLM:
                 # Build detail with extra LLM info
                 detail: dict[str, Any] = {
                     "claim_id": claim.claim_id,
+                    "text": claim.text,
                     "status": status.value,
                     "type": claim.claim_type.value,
                     "supporting_evidence_ids": supporting_ids,
@@ -206,6 +207,7 @@ class ClaimValidatorLLM:
 
                 detail = {
                     "claim_id": claim.claim_id,
+                    "text": claim.text,
                     "status": status.value,
                     "type": claim.claim_type.value,
                     "supporting_evidence_ids": [],

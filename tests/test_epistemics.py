@@ -20,7 +20,7 @@ class TestClaimExtraction:
     def test_extract_plan_claim_from_proposal(self) -> None:
         """Test that proposal text is extracted as a plan claim."""
         artifact = {"proposal": "We should adopt uv for package management."}
-        claims = extract_claims("node1", artifact, "proposer")
+        claims = extract_claims(artifact, "proposer")
 
         assert len(claims) == 1
         assert claims[0].claim_type == ClaimType.PLAN
@@ -34,7 +34,7 @@ class TestClaimExtraction:
             "proposal": "Main recommendation",
             "pros": ["Faster than pip", "Better dependency resolution"],
         }
-        claims = extract_claims("node1", artifact, "proposer")
+        claims = extract_claims(artifact, "proposer")
 
         # 1 plan + 2 inference claims
         assert len(claims) == 3
@@ -48,7 +48,7 @@ class TestClaimExtraction:
             "proposal": "Main recommendation",
             "pros": ["Valid pro", "", "  ", "Another pro"],
         }
-        claims = extract_claims("node1", artifact, "proposer")
+        claims = extract_claims(artifact, "proposer")
 
         # 1 plan + 2 valid inference claims
         assert len(claims) == 3
@@ -57,23 +57,23 @@ class TestClaimExtraction:
         """Test that claim IDs are deterministic for same input."""
         artifact = {"proposal": "Test proposal"}
 
-        claims_1 = extract_claims("node1", artifact, "proposer")
-        claims_2 = extract_claims("node1", artifact, "proposer")
+        claims_1 = extract_claims(artifact, "proposer")
+        claims_2 = extract_claims(artifact, "proposer")
 
         assert claims_1[0].claim_id == claims_2[0].claim_id
 
-    def test_claim_id_differs_by_node(self) -> None:
-        """Test that claim IDs differ for different nodes."""
+    def test_claim_id_same_text_same_id(self) -> None:
+        """Test that identical text produces the same claim ID regardless of node."""
         artifact = {"proposal": "Test proposal"}
 
-        claims_1 = extract_claims("node1", artifact, "proposer")
-        claims_2 = extract_claims("node2", artifact, "proposer")
+        claims_1 = extract_claims(artifact, "proposer")
+        claims_2 = extract_claims(artifact, "proposer")
 
-        assert claims_1[0].claim_id != claims_2[0].claim_id
+        assert claims_1[0].claim_id == claims_2[0].claim_id
 
     def test_extract_from_empty_artifact(self) -> None:
         """Test extraction from empty artifact returns empty list."""
-        claims = extract_claims("node1", {}, "proposer")
+        claims = extract_claims({}, "proposer")
         assert claims == []
 
     def test_extract_handles_none_values(self) -> None:
@@ -83,7 +83,7 @@ class TestClaimExtraction:
             "pros": None,
             "rationale": None,
         }
-        claims = extract_claims("node1", artifact, "proposer")
+        claims = extract_claims(artifact, "proposer")
         assert claims == []
 
     def test_extract_handles_mixed_none_values(self) -> None:
@@ -92,7 +92,7 @@ class TestClaimExtraction:
             "proposal": "Valid proposal",
             "pros": [None, "Valid pro", None],
         }
-        claims = extract_claims("node1", artifact, "proposer")
+        claims = extract_claims(artifact, "proposer")
 
         # 1 plan claim + 1 valid inference claim
         assert len(claims) == 2

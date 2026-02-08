@@ -86,7 +86,7 @@ class Evidence:
         return {
             "evidence_id": self.evidence_id,
             "source": self.source,
-            "excerpt_length": len(self.excerpt),
+            "excerpt": self.excerpt[:500],
             "provenance": self.provenance,
         }
 

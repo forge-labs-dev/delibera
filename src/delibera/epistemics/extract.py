@@ -9,23 +9,24 @@ from typing import Any
 from delibera.epistemics.models import Claim, ClaimType
 
 
-def _generate_claim_id(node_id: str, text: str) -> str:
-    """Generate a deterministic claim ID from node ID and text.
+def _generate_claim_id(text: str) -> str:
+    """Generate a deterministic claim ID from claim text.
+
+    The ID depends only on the text so that identical claims from
+    different nodes share the same ID and are naturally deduplicated
+    during ledger merge.
 
     Args:
-        node_id: The node that owns this claim.
         text: The claim text.
 
     Returns:
         A 10-character hex string ID.
     """
     normalized = text.strip().lower()
-    hash_input = f"{node_id}:{normalized}"
-    return hashlib.sha1(hash_input.encode()).hexdigest()[:10]
+    return hashlib.sha1(normalized.encode()).hexdigest()[:10]
 
 
 def extract_claims(
-    node_id: str,
     artifact: dict[str, Any],
     owner: str,
 ) -> list[Claim]:
@@ -39,7 +40,6 @@ def extract_claims(
     - Empty strings are skipped
 
     Args:
-        node_id: The node ID (used for claim ID generation).
         artifact: The node's artifact dict.
         owner: The role that produced this artifact.
 
@@ -53,7 +53,7 @@ def extract_claims(
     if proposal and isinstance(proposal, str) and proposal.strip():
         claims.append(
             Claim(
-                claim_id=_generate_claim_id(node_id, proposal),
+                claim_id=_generate_claim_id(proposal),
                 text=proposal.strip(),
                 claim_type=ClaimType.PLAN,
                 confidence=0.8,
@@ -68,7 +68,7 @@ def extract_claims(
             if fact and isinstance(fact, str) and fact.strip():
                 claims.append(
                     Claim(
-                        claim_id=_generate_claim_id(node_id, fact),
+                        claim_id=_generate_claim_id(fact),
                         text=fact.strip(),
                         claim_type=ClaimType.FACT,
                         confidence=0.9,
@@ -83,7 +83,7 @@ def extract_claims(
             if pro and isinstance(pro, str) and pro.strip():
                 claims.append(
                     Claim(
-                        claim_id=_generate_claim_id(node_id, pro),
+                        claim_id=_generate_claim_id(pro),
                         text=pro.strip(),
                         claim_type=ClaimType.INFERENCE,
                         confidence=0.6,
@@ -98,7 +98,7 @@ def extract_claims(
             if item and isinstance(item, str) and item.strip():
                 claims.append(
                     Claim(
-                        claim_id=_generate_claim_id(node_id, item),
+                        claim_id=_generate_claim_id(item),
                         text=item.strip(),
                         claim_type=ClaimType.INFERENCE,
                         confidence=0.6,

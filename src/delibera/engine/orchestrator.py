@@ -750,7 +750,14 @@ class Engine:
             try:
                 results = self._retriever.retrieve(query, max_results=5)
                 return {
-                    "evidence": [{"source": r.source, "excerpt": r.excerpt} for r in results],
+                    "evidence": [
+                        {
+                            "source": r.source,
+                            "excerpt": r.excerpt,
+                            **({"title": r.metadata["title"]} if r.metadata.get("title") else {}),
+                        }
+                        for r in results
+                    ],
                     "notes": [
                         f"Found {len(results)} results via retriever (LLM fallback)",
                     ],
@@ -796,7 +803,7 @@ class Engine:
         node = tree.get_node(node_id)
 
         # Extract claims (same as heuristic path)
-        claims = extract_claims(node_id, node.artifact, owner)
+        claims = extract_claims(node.artifact, owner)
         node.ledger.claims = claims
 
         # Use LLM validator
@@ -905,13 +912,18 @@ class Engine:
             node.ledger.evidence.append(evidence)
 
             # Emit evidence_added trace event
+            ev_dict = evidence.to_dict()
+            for extra_key in ("title", "summary", "query"):
+                val = item.get(extra_key, "")
+                if val:
+                    ev_dict[extra_key] = val
             writer.emit(
                 TraceEvent(
                     event_type="evidence_added",
                     run_id=run_id,
                     payload={
                         "node_id": node_id,
-                        "evidence": evidence.to_dict(),
+                        "evidence": ev_dict,
                     },
                 )
             )
@@ -1661,7 +1673,14 @@ class Engine:
                         results = verified_results
 
                 research_output = {
-                    "evidence": [{"source": r.source, "excerpt": r.excerpt} for r in results],
+                    "evidence": [
+                        {
+                            "source": r.source,
+                            "excerpt": r.excerpt,
+                            **({"title": r.metadata["title"]} if r.metadata.get("title") else {}),
+                        }
+                        for r in results
+                    ],
                     "notes": [
                         f"Found {len(results)} results via retriever",
                         f"Methods: {', '.join({r.method for r in results})}",
@@ -2157,7 +2176,7 @@ class Engine:
         # PRUNE
         child_ids = [c.node_id for c in children]
         survivor_ids, pruned_ids = operators.prune(
-            tree, child_ids, keep_count=keep_k, weights=current_weights
+            tree, child_ids, keep_count=keep_k, weights=current_weights, rule=_prune_rule
         )
 
         writer.emit(

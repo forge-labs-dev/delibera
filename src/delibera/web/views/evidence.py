@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 import streamlit as st
 
@@ -19,6 +20,34 @@ TYPE_BADGE = {
     "value": "💎 Value",
     "plan": "📋 Plan",
 }
+
+
+def _extract_domain(url: str) -> str:
+    """Extract a readable domain name from a URL."""
+    if "vertexaisearch.cloud.google.com/grounding-api-redirect" in url:
+        return "Google Search"
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.removeprefix("www.")
+        return domain or "Web Source"
+    except Exception:
+        return "Web Source"
+
+
+def _format_source(
+    source: str,
+    title: str = "",
+    summary: str = "",
+) -> str:
+    """Format an evidence source for display as markdown.
+
+    Priority: summary (LLM-generated) > title (page title) > domain name.
+    """
+    if not source.startswith("http"):
+        return f"📄 {source}"
+    domain = _extract_domain(source)
+    display_name = summary or title or domain
+    return f"🌐 [{display_name}]({source}) — *{domain}*"
 
 
 def render(
@@ -97,9 +126,7 @@ def _render_claims(
                     for cit in citations:
                         source = cit.get("source", "unknown")
                         excerpt = cit.get("excerpt", "")
-                        is_web = source.startswith("http") or "google" in source.lower()
-                        source_badge = "🌐 Gemini Search" if is_web else "📄 Local"
-                        st.markdown(f"- {source_badge} **{source}**")
+                        st.markdown(f"- {_format_source(source)}")
                         if excerpt:
                             st.caption(excerpt)
         return
@@ -107,30 +134,61 @@ def _render_claims(
     # Fallback: show claim validation results from trace events
     if validation_events:
         st.markdown("*Claim validation results from trace events:*")
+
+        # Use the latest validation event per claim_id (later rounds override earlier ones)
+        claims_by_id: dict[str, dict[str, Any]] = {}
         for event in validation_events:
-            payload = event.get("payload", {})
-            node_id = payload.get("node_id", "unknown")[:8]
-            supported = payload.get("supported", 0)
-            weak = payload.get("weak", 0)
-            unsupported = payload.get("unsupported", 0)
+            for d in event.get("payload", {}).get("details", []):
+                cid = d.get("claim_id", "")
+                if cid:
+                    claims_by_id[cid] = d
 
-            with st.container(border=True):
-                st.markdown(f"**Node {node_id}**")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("🟢 Supported", supported)
-                c2.metric("🟡 Weak", weak)
-                c3.metric("🔴 Unsupported", unsupported)
+        unique_claims = list(claims_by_id.values())
+        total_supported = sum(1 for d in unique_claims if d.get("status") == "supported")
+        total_weak = sum(1 for d in unique_claims if d.get("status") == "weak")
+        total_unsupported = sum(1 for d in unique_claims if d.get("status") == "unsupported")
 
-                details = payload.get("details", [])
-                if details:
-                    with st.expander(f"View {len(details)} claim details"):
-                        for d in details:
-                            status = d.get("status", "unknown")
-                            text = d.get("text", d.get("claim_id", "?"))
-                            badge = STATUS_BADGE.get(status, f"⚪ {status}")
-                            st.markdown(f"- {badge}: {text}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🟢 Supported", total_supported)
+        c2.metric("🟡 Weak", total_weak)
+        c3.metric("🔴 Unsupported", total_unsupported)
+
+        if unique_claims:
+            with st.expander(f"View {len(unique_claims)} claim details"):
+                for d in unique_claims:
+                    status = d.get("status", "unknown")
+                    text = d.get("text", d.get("claim_id", "?"))
+                    badge = STATUS_BADGE.get(status, f"⚪ {status}")
+                    st.markdown(f"- {badge}: {text}")
     else:
         st.info("No claim data available. Run with `--use-all-llm` for detailed claims.")
+
+
+def _build_evidence_enrichment(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """Build a source → {excerpt, title, summary, query} lookup from work_output events.
+
+    This provides fallback data for older runs where evidence_added events
+    don't include excerpt, title, or summary.
+    """
+    enrichment: dict[str, dict[str, str]] = {}
+    for event in events:
+        if (
+            event.get("event_type") == "work_output"
+            and event.get("payload", {}).get("role") == "researcher"
+        ):
+            output = event.get("payload", {}).get("output", {})
+            for item in output.get("evidence", []):
+                source = item.get("source", "")
+                if source and source not in enrichment:
+                    enrichment[source] = {
+                        "excerpt": item.get("excerpt", ""),
+                        "title": item.get("title", ""),
+                        "summary": item.get("summary", ""),
+                        "query": item.get("query", ""),
+                    }
+    return enrichment
 
 
 def _render_evidence(
@@ -166,6 +224,9 @@ def _render_evidence(
     st.metric("Total Evidence Items", len(evidence_events))
     st.divider()
 
+    # Build enrichment map from work_output events (fallback for old runs)
+    enrichment = _build_evidence_enrichment(events)
+
     # Group by node_id
     by_node: dict[str, list[dict[str, Any]]] = {}
     for event in evidence_events:
@@ -184,12 +245,20 @@ def _render_evidence(
                 evidence_data = ev.get("evidence", {})
                 source = evidence_data.get("source", "unknown")
                 excerpt = evidence_data.get("excerpt", "")
+                title = evidence_data.get("title", "")
+                summary = evidence_data.get("summary", "")
 
-                is_web = source.startswith("http") or "google" in source.lower()
-                source_badge = "🌐 Gemini Search" if is_web else "📄 Local"
+                # Enrich from work_output if missing
+                if source in enrichment:
+                    if not excerpt:
+                        excerpt = enrichment[source].get("excerpt", "")
+                    if not title:
+                        title = enrichment[source].get("title", "")
+                    if not summary:
+                        summary = enrichment[source].get("summary", "")
 
                 with st.container(border=True):
-                    st.markdown(f"{source_badge} **{source}**")
+                    st.markdown(_format_source(source, title, summary))
                     if excerpt:
                         st.caption(excerpt)
 
