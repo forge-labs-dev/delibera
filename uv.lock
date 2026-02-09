@@ -161,15 +161,9 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-llm = [
     { name = "google-generativeai" },
-]
-web = [
     { name = "plotly" },
+    { name = "pyyaml" },
     { name = "streamlit" },
     { name = "streamlit-agraph" },
     { name = "watchdog" },
@@ -187,14 +181,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
-    { name = "google-generativeai", marker = "extra == 'llm'", specifier = ">=0.8.0" },
-    { name = "plotly", marker = "extra == 'web'", specifier = ">=5.18.0" },
+    { name = "google-generativeai", specifier = ">=0.8.0" },
+    { name = "plotly", specifier = ">=5.18.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "streamlit", marker = "extra == 'web'", specifier = ">=1.40.0" },
-    { name = "streamlit-agraph", marker = "extra == 'web'", specifier = ">=0.0.45" },
-    { name = "watchdog", marker = "extra == 'web'", specifier = ">=4.0.0" },
+    { name = "streamlit", specifier = ">=1.40.0" },
+    { name = "streamlit-agraph", specifier = ">=0.0.45" },
+    { name = "watchdog", specifier = ">=4.0.0" },
 ]
-provides-extras = ["llm", "web"]
 
 [package.metadata.requires-dev]
 dev = [
