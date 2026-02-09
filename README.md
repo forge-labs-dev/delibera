@@ -63,7 +63,7 @@ delibera run --question "Your question" --use-all-llm --max-parallel-branches 3 
 # Specify model and parameters
 delibera run --question "Your question" \
   --use-all-llm \
-  --llm-model gemini-2.0-flash \
+  --llm-model gemini-2.5-flash \
   --llm-temperature 0.3 \
   --no-gates
 ```

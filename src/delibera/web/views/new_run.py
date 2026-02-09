@@ -222,7 +222,7 @@ def render() -> None:
         st.subheader("LLM Parameters")
         llm_model = st.selectbox(
             "Model",
-            ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+            ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"],
             index=0,
             key="llm_model",
         )

@@ -21,7 +21,7 @@ from delibera.llm.base import (
 )
 
 # Default model for Gemini
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 # Environment variable for API key
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
@@ -63,7 +63,7 @@ class GeminiClient:
         """Initialize the Gemini client.
 
         Args:
-            model: Default model name. Defaults to gemini-2.0-flash.
+            model: Default model name. Defaults to gemini-2.5-flash.
             api_key: API key. If None, reads from GEMINI_API_KEY env var.
 
         Raises:

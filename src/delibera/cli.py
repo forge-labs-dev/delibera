@@ -157,7 +157,7 @@ def version() -> None:
     "--llm-model",
     type=str,
     default=None,
-    help="LLM model name (e.g., 'gemini-2.0-flash'). If not set, uses provider default.",
+    help="LLM model name (e.g., 'gemini-2.5-flash'). If not set, uses provider default.",
 )
 @click.option(
     "--llm-temperature",
@@ -307,7 +307,7 @@ def run(
 
         try:
             llm_client = GeminiClient(
-                model=llm_model or "gemini-2.0-flash",
+                model=llm_model or "gemini-2.5-flash",
             )
             llm_agents = []
             if use_llm_planner:

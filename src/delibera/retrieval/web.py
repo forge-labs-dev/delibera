@@ -13,7 +13,7 @@ from typing import Any
 from delibera.retrieval.base import RetrievalResult, WebSearchError
 
 # Model that supports grounding
-GROUNDING_MODEL = "gemini-2.0-flash"
+GROUNDING_MODEL = "gemini-2.5-flash"
 
 
 def _get_api_key() -> str:

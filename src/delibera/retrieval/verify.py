@@ -215,7 +215,7 @@ Does this evidence support the claim? """
         """Call the Gemini API."""
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={self._api_key}"
+            f"gemini-2.5-flash:generateContent?key={self._api_key}"
         )
 
         body = {
