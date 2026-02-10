@@ -317,14 +317,18 @@ def render() -> None:
 
     # API key input
     st.subheader("API Key")
-    env_key = os.environ.get("GEMINI_API_KEY", "")
-    api_key = st.text_input(
-        "Gemini API Key",
-        value=env_key,
-        type="password",
-        key="gemini_api_key",
-        help="Required for LLM agents. Pre-filled from GEMINI_API_KEY env var if set.",
-    )
+    has_server_key = bool(os.environ.get("GEMINI_API_KEY", ""))
+    if has_server_key:
+        st.success("Server-side Gemini API key is configured.")
+        api_key = ""  # use env var directly; don't expose to frontend
+    else:
+        api_key = st.text_input(
+            "Gemini API Key",
+            value="",
+            type="password",
+            key="gemini_api_key",
+            help="Required for LLM agents.",
+        )
     needs_llm = use_all_llm or any(
         [
             use_planner,
@@ -335,7 +339,7 @@ def render() -> None:
             use_validator,
         ]
     )
-    if needs_llm and not api_key:
+    if needs_llm and not api_key and not has_server_key:
         st.warning("A Gemini API key is required to run LLM agents.")
 
     # Build command preview
@@ -362,7 +366,7 @@ def render() -> None:
     st.code(cmd_str, language="bash")
 
     # Run button
-    can_run = bool(question.strip()) and (not needs_llm or bool(api_key))
+    can_run = bool(question.strip()) and (not needs_llm or bool(api_key) or has_server_key)
     col_run, col_status = st.columns([1, 3])
     with col_run:
         run_clicked = st.button(
